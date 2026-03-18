@@ -165,7 +165,7 @@ function hashPw(pw){let h=5381;for(let i=0;i<pw.length;i++)h=((h<<5)+h)^pw.charC
 // ═══════════════════════════════════════════
 //  CACHE + DB
 // ═══════════════════════════════════════════
-const cache={_s:{},get(k){if(this._s[k]!==undefined)return this._s[k];try{return JSON.parse(localStorage.getItem("sl_"+k)||"null")}catch{return null}},set(k,v){this._s[k]=v;try{localStorage.setItem("sl_"+k,JSON.stringify(v))}catch{}},clear(k){delete this._s[k];try{localStorage.removeItem("sl_"+k)}catch{}}};
+const cache={_s:{},get(k){if(this._s[k]!==undefined)return this._s[k];try{return JSON.parse(localStorage.getItem("sl_"+k)||"null")}catch{return null}},set(k,v){this._s[k]=v;try{localStorage.setItem("sl_"+k,JSON.stringify(v))}catch{}},clear(k){delete this._s[k];try{localStorage.removeItem("sl_"+k)}catch{}},clearAll(){this._s={};try{Object.keys(localStorage).filter(k=>k.startsWith("sl_")).forEach(k=>localStorage.removeItem(k))}catch{}}};
 
 const mi=r=>r?({id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image}):null;
 const mt=r=>r?({id:r.id,name:r.name,phone:r.phone,createdAt:r.created_at}):null;
@@ -208,6 +208,15 @@ const DB={
       try{const rows=await sb.query("admin_user",{filter:`username=eq.${u}`});const a=rows[0];if(!a)return null;return a.password_hash===hashPw(p)?{id:a.id,username:a.username,displayName:a.display_name}:null;}
       catch{return u==="sattar141"&&hashPw(p)===hashPw("Ak141@")?{id:1,username:"sattar141",displayName:"Administrator"}:null;}
     },
+    async all(){try{const rows=await sb.query("admin_user",{order:"id.asc"});return rows.map(r=>({id:r.id,username:r.username,displayName:r.display_name,createdAt:r.created_at}));}catch{return[];}},
+    async add(username,password,displayName){
+      const rows=await sb.query("admin_user",{order:"id.desc",limit:1});
+      const nextId=(rows[0]?.id||0)+1;
+      return await sb.insert("admin_user",{id:nextId,username,password_hash:hashPw(password),display_name:displayName||username,created_at:now()});
+    },
+    async delete(id){await sb.delete("admin_user",`id=eq.${id}`);},
+    async changePw(id,pw){await sb.update("admin_user",`id=eq.${id}`,{password_hash:hashPw(pw)});},
+    async exists(u){try{const r=await sb.query("admin_user",{filter:`username=eq.${u}`});return r.length>0;}catch{return false;}},
     async seed(){try{const r=await sb.query("admin_user",{});if(r.length===0)await sb.insert("admin_user",{id:1,username:"sattar141",password_hash:hashPw("Ak141@"),display_name:"Administrator",created_at:now()});}catch(e){console.warn("seed:",e.message);}},
   },
   receipts:{
@@ -402,6 +411,81 @@ function groupExpenses(expenses){
   return Object.values(map).sort((a,b)=>b[0].createdAt>a[0].createdAt?1:-1);
 }
 
+
+// ═══════════════════════════════════════════
+//  ADMIN — MANAGE ADMINS
+// ═══════════════════════════════════════════
+function AdminAdmins({user,toast}){
+  const [admins,setAdmins]=useState(null);
+  const [modal,setModal]=useState(null);
+  const [form,setForm]=useState({username:"",password:"",displayName:""});
+  const [saving,setSaving]=useState(false);
+  const rf=async()=>setAdmins(await DB.admin.all());
+  useEffect(()=>{rf();},[]);
+  const add=async()=>{
+    if(!form.username.trim()||!form.password.trim()){toast("أكمل الحقول","error");return;}
+    if(form.password.length<4){toast("كلمة المرور قصيرة جداً","error");return;}
+    if(await DB.admin.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}
+    setSaving(true);
+    try{
+      await DB.admin.add(form.username.trim(),form.password.trim(),form.displayName.trim()||form.username.trim());
+      await DB.audit.add(user.displayName,"إضافة أدمن",form.username.trim());
+      await rf();setModal(null);setForm({username:"",password:"",displayName:""});
+      toast("✅ تم إنشاء حساب الأدمن");
+    }catch(e){toast("خطأ: "+e.message,"error");}
+    setSaving(false);
+  };
+  if(!admins)return <LoadingPage/>;
+  return <div className="page" style={{padding:"18px 14px"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <div style={{fontWeight:800,fontSize:18}}>🔑 الأدمنز</div>
+      <Btn onClick={()=>setModal("add")} color={C.blue} size="sm" icon="+">إضافة أدمن</Btn>
+    </div>
+    <div style={{background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.blue}}>
+      كل الأدمنز يملكون نفس الصلاحيات الكاملة
+    </div>
+    {admins.map(a=><Card key={a.id} style={{padding:"12px 16px",marginBottom:9}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:15}}>{a.displayName}</div>
+          <div style={{color:C.muted,fontSize:12}}>@{a.username}</div>
+          <div style={{color:C.muted,fontSize:11}}>{a.createdAt}</div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <Badge color={C.blue} small>🔑 Admin</Badge>
+          {a.id!==1&&<Btn size="sm" color={C.purple} onClick={()=>setModal({type:"pw",admin:a})}>🔑</Btn>}
+          {a.id!==1&&<Btn size="sm" color={C.red} onClick={async()=>{
+            if(confirm(`حذف ${a.username}؟`)){
+              await DB.admin.delete(a.id);
+              await DB.audit.add(user.displayName,"حذف أدمن",a.username);
+              toast("🗑 تم الحذف");rf();
+            }
+          }}>🗑</Btn>}
+          {a.id===1&&<Badge color={C.green} small>⭐ رئيسي</Badge>}
+        </div>
+      </div>
+    </Card>)}
+    <Modal open={modal==="add"} onClose={()=>setModal(null)} title="➕ إضافة أدمن جديد">
+      <div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}30`,borderRadius:10,padding:"9px 14px",marginBottom:14,fontSize:12,color:C.blue}}>
+        ⚠️ الأدمن الجديد يملك نفس صلاحياتك الكاملة
+      </div>
+      <Input label="الاسم (اختياري)" value={form.displayName} onChange={v=>setForm({...form,displayName:v})} placeholder="الاسم الكامل"/>
+      <Input label="اسم المستخدم *" value={form.username} onChange={v=>setForm({...form,username:v})} placeholder="admin2"/>
+      <Input label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
+      <Btn onClick={add} color={C.blue} full loading={saving} style={{marginTop:8}}>إنشاء الحساب ✓</Btn>
+    </Modal>
+    <Modal open={modal?.type==="pw"} onClose={()=>setModal(null)} title={`🔑 تغيير كلمة مرور — ${modal?.admin?.username}`}>
+      {modal?.admin&&<ResetAdminPw admin={modal.admin} onDone={async()=>{await DB.audit.add(user.displayName,"تغيير كلمة مرور أدمن",modal.admin.username);setModal(null);toast("✅ تم التغيير");}}/>}
+    </Modal>
+  </div>;
+}
+function ResetAdminPw({admin,onDone}){
+  const [pw,setPw]=useState("");const [saving,setSaving]=useState(false);
+  return <><div style={{color:C.muted,fontSize:12,marginBottom:12}}>المستخدم: <strong style={{color:C.text}}>{admin.username}</strong></div>
+    <Input label="كلمة المرور الجديدة *" type="password" value={pw} onChange={setPw} placeholder="••••••"/>
+    <Btn loading={saving} onClick={async()=>{if(pw.length<4){alert("قصيرة جداً");return;}setSaving(true);await DB.admin.changePw(admin.id,pw);onDone();}} color={C.purple} full style={{marginTop:8}}>حفظ ✓</Btn></>;
+}
+
 // ═══════════════════════════════════════════
 //  LOGIN
 // ═══════════════════════════════════════════
@@ -419,17 +503,17 @@ function LoginScreen({onLogin}){
           onLogin({id:1,username:"sattar141",role:"admin",displayName:"Administrator"});
           return;
         }
-        const a=await Promise.race([DB.admin.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),5000))]);
+        const a=await Promise.race([DB.admin.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!a){setErr("❌ بيانات الإداري غير صحيحة");setLoading(false);return;}
         onLogin({...a,role:"admin",displayName:a.displayName||"Administrator"});
       }
       else if(role==="viewer"){
-        const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),5000))]);
+        const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!v){setErr("❌ بيانات الدخول غير صحيحة");setLoading(false);return;}
         onLogin({...v,role:"viewer"});
       }
       else{
-        const tu=await Promise.race([DB.techUsers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),5000))]);
+        const tu=await Promise.race([DB.techUsers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!tu){setErr("❌ اسم المستخدم أو كلمة المرور غير صحيحة");setLoading(false);return;}
         const tech=await DB.techs.find(tu.techId);
         onLogin({...tu,role:"tech",techName:tech?.name||u.trim()});
@@ -983,8 +1067,16 @@ function App(){
   const [user,setUser]=useState(null);const [page,setPage]=useState("dash");
   const [toast,setToast]=useState({msg:"",visible:false,type:"success"});
   useEffect(()=>{DB.admin.seed();},[]);
+  // Preload critical data after login
+  useEffect(()=>{
+    if(user){
+      DB.items.all();
+      DB.techs.all();
+      DB.techUsers.all();
+    }
+  },[user]);
   const showToast=useCallback((msg,type="success")=>{setToast({msg,visible:true,type});setTimeout(()=>setToast(t=>({...t,visible:false})),2800);},[]);
-  const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"}];
+  const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"},{id:"admins",icon:"🔑",label:"Admins"}];
   const techTabs=[{id:"dash",icon:"📦",label:"رصيدي"},{id:"expense",icon:"📤",label:"صرفية"},{id:"history",icon:"📋",label:"سجلي"},{id:"profile",icon:"👤",label:"ملفي"}];
   if(!user)return <><style>{css}</style><LoginScreen onLogin={u=>{setUser(u);setPage("dash");}}/></>;
   if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={()=>{setUser(null);setPage("dash");}}/></>;
