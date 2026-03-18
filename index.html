@@ -493,6 +493,7 @@ function LoginScreen({onLogin}){
   const [role,setRole]=useState("admin");
   const [u,setU]=useState("");const [p,setP]=useState("");
   const [err,setErr]=useState("");const [loading,setLoading]=useState(false);
+  const [stay,setStay]=useState(true);
   const login=async()=>{
     if(!u.trim()||!p.trim()){setErr("أدخل اسم المستخدم وكلمة المرور");return;}
     setLoading(true);setErr("");
@@ -500,28 +501,28 @@ function LoginScreen({onLogin}){
       if(role==="admin"){
         // fallback مباشر للأدمن بدون Supabase
         if(u.trim()==="sattar141" && hashPw(p.trim())===hashPw("Ak141@")){
-          onLogin({id:1,username:"sattar141",role:"admin",displayName:"Administrator"});
+          onLogin({id:1,username:"sattar141",role:"admin",displayName:"Administrator",_stay:stay});
           return;
         }
         const a=await Promise.race([DB.admin.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!a){setErr("❌ بيانات الإداري غير صحيحة");setLoading(false);return;}
-        onLogin({...a,role:"admin",displayName:a.displayName||"Administrator"});
+        onLogin({...a,role:"admin",displayName:a.displayName||"Administrator",_stay:stay});
       }
       else if(role==="viewer"){
         const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!v){setErr("❌ بيانات الدخول غير صحيحة");setLoading(false);return;}
-        onLogin({...v,role:"viewer"});
+        onLogin({...v,role:"viewer",_stay:stay});
       }
       else{
         const tu=await Promise.race([DB.techUsers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),3000))]);
         if(!tu){setErr("❌ اسم المستخدم أو كلمة المرور غير صحيحة");setLoading(false);return;}
         const tech=await DB.techs.find(tu.techId);
-        onLogin({...tu,role:"tech",techName:tech?.name||u.trim()});
+        onLogin({...tu,role:"tech",techName:tech?.name||u.trim(),_stay:stay});
       }
     }catch(e){
       // لو فشل Supabase، جرب fallback للأدمن
       if(role==="admin" && u.trim()==="sattar141" && hashPw(p.trim())===hashPw("Ak141@")){
-        onLogin({id:1,username:"sattar141",role:"admin",displayName:"Administrator"});
+        onLogin({id:1,username:"sattar141",role:"admin",displayName:"Administrator",_stay:stay});
         return;
       }
       setErr("خطأ في الاتصال بقاعدة البيانات — تأكد من الإنترنت");
@@ -543,6 +544,12 @@ function LoginScreen({onLogin}){
         <Input label="اسم المستخدم" value={u} onChange={v=>{setU(v);setErr("");}} placeholder={role==="admin"?"sattar141":"username"}/>
         <Input label="كلمة المرور" type="password" value={p} onChange={v=>{setP(v);setErr("");}} placeholder="••••••"/>
         {err&&<div style={{color:C.red,fontSize:12,marginBottom:10,padding:"8px 12px",background:`${C.red}15`,borderRadius:8}}>{err}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,cursor:"pointer"}} onClick={()=>setStay(!stay)}>
+          <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${stay?C.blue:C.border}`,background:stay?C.blue:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .2s"}}>
+            {stay&&<span style={{color:"#fff",fontSize:14,lineHeight:1}}>✓</span>}
+          </div>
+          <span style={{fontSize:13,color:stay?C.text:C.muted,userSelect:"none"}}>ابقَ متصلاً (Stay signed in)</span>
+        </div>
         <Btn onClick={login} color={roles.find(r=>r[0]===role)?.[3]||C.blue} full size="lg" loading={loading}>دخول ←</Btn>
       </Card>
       <div style={{textAlign:"center",color:C.muted,fontSize:11,marginTop:14}}>{role!=="admin"?"الحساب يُنشئه الإداري فقط":""}</div>
@@ -796,12 +803,12 @@ function AdminReports({toast}){
   const [tab,setTab]=useState("overview");const [data,setData]=useState(null);
   useEffect(()=>{(async()=>{
     const [techs,expenses,receipts,items]=await Promise.all([DB.techs.all(),DB.expenses.all(),DB.receipts.all(),DB.items.all()]);
-    const techStats=[];for(const t of techs){const b=await DB.fullBalances(t.id);techStats.push({id:t.id,name:t.name,received:b.reduce((s,x)=>s+x.received,0),spent:b.reduce((s,x)=>s+x.spent,0),items:b.length,low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length});}
+    const techStats=[];let totalRemaining=0;for(const t of techs){const b=await DB.fullBalances(t.id);const rem=b.reduce((s,x)=>s+x.balance,0);totalRemaining+=rem;techStats.push({id:t.id,name:t.name,received:b.reduce((s,x)=>s+x.received,0),spent:b.reduce((s,x)=>s+x.spent,0),remaining:rem,items:b.length,low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length});}
     const usageMap={};expenses.forEach(e=>{const it=items.find(i=>i.id===e.itemId);if(!it)return;usageMap[e.itemId]=usageMap[e.itemId]||{name:it.name,unit:it.unit,total:0};usageMap[e.itemId].total+=e.quantity;});
     const topItems=Object.values(usageMap).sort((a,b)=>b.total-a.total);
     const days14=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-13+i);return d.toISOString().slice(0,10);});
     const lineData=days14.map(d=>({day:d.slice(5),قيمة:expenses.filter(e=>e.createdAt.startsWith(d)||e.createdAt.includes(d.replace(/-/g,"/"))).reduce((s,e)=>s+e.quantity,0)}));
-    setData({techs,expenses,receipts,items,techStats,topItems,lineData});
+    setData({techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining});
   })();},[]);
   const exportTxt=()=>{
     if(!data)return;
@@ -812,7 +819,7 @@ function AdminReports({toast}){
     toast("✅ تم تصدير التقرير");
   };
   if(!data)return <LoadingPage/>;
-  const {techs,expenses,receipts,items,techStats,topItems,lineData}=data;
+  const {techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining}=data;
   return <div className="page" style={{padding:"18px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div style={{fontWeight:800,fontSize:18}}>📊 التقارير</div>
@@ -823,7 +830,7 @@ function AdminReports({toast}){
     </div>
     {tab==="overview"&&<div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-        {[["👷",techs.length,C.blue,"الفنيين"],["🔧",items.length,C.purple,"المعدات"],["📦",receipts.length,C.green,"تسليمات"],["📤",expenses.length,C.amber,"صرفيات"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"14px 16px"}} glow={c}><div style={{fontSize:20}}>{ic}</div><div style={{fontSize:26,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:11}}>{l}</div></Card>)}
+        {[["👷",techs.length,C.blue,"الفنيين"],["🔧",items.length,C.purple,"المعدات"],["📦",receipts.length,C.green,"إجمالي استلام"],["📤",expenses.length,C.amber,"إجمالي صرف"],["📊",totalRemaining||0,C.cyan,"المتبقي غير مصروف"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"14px 16px"}} glow={c}><div style={{fontSize:20}}>{ic}</div><div style={{fontSize:26,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:11}}>{l}</div></Card>)}
       </div>
       <Card style={{padding:"16px 12px"}}><div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:10}}>آخر 14 يوم</div>
         <LineChartSVG data={lineData} dataKey="قيمة" color={C.amber} height={140}/>
@@ -831,7 +838,7 @@ function AdminReports({toast}){
     </div>}
     {tab==="techs"&&(techStats.length===0?<div style={{color:C.muted,textAlign:"center",padding:50}}>لا يوجد فنيين</div>:techStats.map((t,i)=><Card key={i} style={{padding:"14px 16px",marginBottom:10}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}><div style={{fontWeight:700,fontSize:15}}>👷 {t.name}</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:10,padding:"9px",textAlign:"center"}}><div style={{fontSize:20,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["المتبقي",t.remaining,C.cyan],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:10,padding:"9px",textAlign:"center"}}><div style={{fontSize:20,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
     </Card>))}
     {tab==="items"&&<><Card style={{padding:"16px 12px",marginBottom:14}}><div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:10}}>الأكثر استخداماً</div>
       <BarChartSVG data={topItems.slice(0,6).map((x,i)=>({day:x.name.slice(0,6),total:x.total}))} dataKeys={["total"]} colors={[C.amber]} height={160}/>
@@ -1066,24 +1073,55 @@ function ViewerItems(){
 function App(){
   const [user,setUser]=useState(null);const [page,setPage]=useState("dash");
   const [toast,setToast]=useState({msg:"",visible:false,type:"success"});
-  useEffect(()=>{DB.admin.seed();},[]);
+
+  // Restore session on load
+  useEffect(()=>{
+    DB.admin.seed();
+    try{
+      const saved=localStorage.getItem("sl_session");
+      if(saved){const u=JSON.parse(saved);setUser(u);}
+    }catch{}
+  },[]);
+
+  const doLogin=(u)=>{
+    setUser(u);setPage("dash");
+    // Save session if stay signed in
+    if(u._stay) localStorage.setItem("sl_session",JSON.stringify(u));
+    else localStorage.removeItem("sl_session");
+  };
+  const doLogout=()=>{setUser(null);setPage("dash");localStorage.removeItem("sl_session");cache.clearAll();};
+
   // Preload critical data after login
   useEffect(()=>{
-    if(user){
-      DB.items.all();
-      DB.techs.all();
-      DB.techUsers.all();
+    if(user){DB.items.all();DB.techs.all();DB.techUsers.all();}
+  },[user]);
+
+  // Request camera + geolocation permissions for tech on login
+  useEffect(()=>{
+    if(user?.role==="tech"){
+      // GPS watch
+      if(navigator.geolocation){
+        navigator.geolocation.watchPosition(
+          pos=>{const l={lat:pos.coords.latitude.toFixed(6),lng:pos.coords.longitude.toFixed(6)};localStorage.setItem("sl_techLoc_"+user.techId,JSON.stringify(l));},
+          ()=>{},
+          {enableHighAccuracy:true,maximumAge:30000}
+        );
+      }
+      // Camera permission request
+      if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+        navigator.mediaDevices.getUserMedia({video:true}).then(s=>{s.getTracks().forEach(t=>t.stop());}).catch(()=>{});
+      }
     }
   },[user]);
   const showToast=useCallback((msg,type="success")=>{setToast({msg,visible:true,type});setTimeout(()=>setToast(t=>({...t,visible:false})),2800);},[]);
   const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"},{id:"admins",icon:"🔑",label:"Admins"}];
   const techTabs=[{id:"dash",icon:"📦",label:"رصيدي"},{id:"expense",icon:"📤",label:"صرفية"},{id:"history",icon:"📋",label:"سجلي"},{id:"profile",icon:"👤",label:"ملفي"}];
-  if(!user)return <><style>{css}</style><LoginScreen onLogin={u=>{setUser(u);setPage("dash");}}/></>;
-  if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={()=>{setUser(null);setPage("dash");}}/></>;
+  if(!user)return <><style>{css}</style><LoginScreen onLogin={doLogin}/></>;
+  if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={doLogout}/></>;
   const isAdmin=user.role==="admin";const tabs=isAdmin?adminTabs:techTabs;const color=isAdmin?C.blue:C.green;
   const renderPage=()=>{
     if(isAdmin)switch(page){case"dash":return<AdminDash/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"viewers":return<AdminViewers user={user} toast={showToast}/>;default:return<AdminDash/>;}
-    switch(page){case"dash":return<TechDash user={user}/>;case"expense":return<TechExpense user={user} toast={showToast}/>;case"history":return<TechHistory user={user}/>;case"profile":return<TechProfile user={user} onLogout={()=>{setUser(null);setPage("dash");}} toast={showToast}/>;default:return<TechDash user={user}/>;}
+    switch(page){case"dash":return<TechDash user={user}/>;case"expense":return<TechExpense user={user} toast={showToast}/>;case"history":return<TechHistory user={user}/>;case"profile":return<TechProfile user={user} onLogout={doLogout} toast={showToast}/>;default:return<TechDash user={user}/>;}
   };
   return <>
     <style>{css}</style>
@@ -1091,7 +1129,7 @@ function App(){
     <div style={{position:"sticky",top:0,zIndex:50,background:C.bg2,borderBottom:`1px solid ${C.border}`,maxWidth:500,margin:"0 auto"}}>
       <div style={{padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:14}}>Space Link</span></div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color={color} small>{isAdmin?"🔑 Administrator":"🛠 "+user.techName}</Badge><button onClick={()=>{setUser(null);setPage("dash");}} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button></div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color={color} small>{isAdmin?"🔑 Administrator":"🛠 "+user.techName}</Badge><button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button></div>
       </div>
     </div>
     <div style={{maxWidth:500,margin:"0 auto",paddingBottom:90}}>{renderPage()}</div>
