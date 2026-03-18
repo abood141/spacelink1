@@ -2,11 +2,22 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07090F">
 <title>Space Link</title>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://icpqrnzvxjexdzwfkcjm.supabase.co" crossorigin>
+<link rel="dns-prefetch" href="https://fonts.googleapis.com">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{background:#07090F;color:#E8EFF8;min-height:100vh;font-family:Tahoma,Arial,sans-serif}
+/* Responsive device widths */
+:root{--max-w:500px;--pad:14px}
+@media(min-width:768px){:root{--max-w:680px;--pad:24px}}
+@media(min-width:1024px){:root{--max-w:820px;--pad:32px}}
+#root>*{max-width:var(--max-w);margin:0 auto}
 #loading{position:fixed;inset:0;background:#07090F;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:9999}
 #loading .logo{width:70px;height:70px;border-radius:50%;background:linear-gradient(135deg,#2563EB,#4F8EF7);display:flex;align-items:center;justify-content:center;font-size:30px}
 #loading .title{font-size:22px;font-weight:800;letter-spacing:-.5px}
@@ -26,6 +37,24 @@ html,body{background:#07090F;color:#E8EFF8;min-height:100vh;font-family:Tahoma,A
 </div>
 <div id="root"></div>
 
+<script>
+// Register service worker for caching
+if('serviceWorker' in navigator){
+  const swCode=`
+const CACHE='spacelink-v2';
+const ASSETS=[
+  'https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js'
+];
+self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
+self.addEventListener('fetch',e=>{if(e.request.url.includes('supabase.co'))return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).then(res=>{if(res.ok){const rc=res.clone();caches.open(CACHE).then(c=>c.put(e.request,rc));}return res;})));});
+`;
+  const blob=new Blob([swCode],{type:'application/javascript'});
+  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+}
+</script>
 <script>
 // Load scripts sequentially for reliability
 function loadScript(src) {
@@ -247,7 +276,7 @@ const DB={
 //  DESIGN
 // ═══════════════════════════════════════════
 const C={bg:"#07090F",bg2:"#0D1220",bg3:"#121A2E",bg4:"#1A2440",blue:"#4F8EF7",blueD:"#2563EB",green:"#10D9A0",greenD:"#059669",red:"#F75D5D",amber:"#F5A623",purple:"#A78BFA",cyan:"#22D3EE",text:"#E8EFF8",muted:"#5A6A85",border:"#1E2D45",chart:["#4F8EF7","#10D9A0","#F5A623","#A78BFA","#F75D5D","#22D3EE"]};
-const css=`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap');
+const css=`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{font-family:'Tajawal',Tahoma,sans-serif;background:${C.bg};color:${C.text};min-height:100vh;overflow-x:hidden}
 input,select,textarea,button{font-family:inherit}
@@ -256,8 +285,11 @@ input,select,textarea,button{font-family:inherit}
 @keyframes slideUp{from{opacity:0;transform:translateY(60px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes spin{to{transform:rotate(360deg)}}
-.page{animation:fadeUp .3s ease}
-.modal-sheet{animation:slideUp .25s cubic-bezier(.32,1.1,.64,1)}
+.page{animation:fadeUp .25s ease;contain:content}
+.modal-sheet{animation:slideUp .2s cubic-bezier(.32,1.1,.64,1);will-change:transform}
+.card-item{contain:layout style;will-change:auto}
+@media(min-width:768px){.page{padding:24px 32px!important}}
+@media(min-width:1024px){.page{padding:28px 48px!important}}
 `;
 
 const Dot=({c,pulse:p})=><span style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:c,boxShadow:`0 0 7px ${c}`,animation:p?"pulse 2s ease infinite":"none",flexShrink:0}}/>;
@@ -309,14 +341,47 @@ const Divider=()=><div style={{height:1,background:C.border,margin:"14px 0"}}/>;
 const LoadingPage=()=><div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:80,gap:16}}><Spinner color={C.blue} size={36}/><div style={{color:C.muted,fontSize:13}}>جارٍ التحميل...</div></div>;
 
 const ImagePicker=({value,onChange,label="صورة"})=>{
-  const ref=useRef();
+  const ref=useRef();const refHQ=useRef();
+  const [hq,setHq]=useState(false);
+  const compress=(file,quality)=>new Promise(res=>{
+    const img=new Image();const url=URL.createObjectURL(file);
+    img.onload=()=>{
+      const canvas=document.createElement("canvas");
+      const max=hq?2048:1024;
+      let w=img.width,h=img.height;
+      if(w>max){h=Math.round(h*max/w);w=max;}
+      if(h>max){w=Math.round(w*max/h);h=max;}
+      canvas.width=w;canvas.height=h;
+      canvas.getContext("2d").drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);
+      res(canvas.toDataURL("image/webp",quality||0.82));
+    };
+    img.src=url;
+  });
+  const handle=async e=>{const f=e.target.files[0];if(!f)return;const r=await compress(f,hq?0.92:0.78);onChange(r);};
   return <div style={{marginBottom:13}}>
-    <div style={{color:C.muted,fontSize:11,marginBottom:6}}>{label}</div>
-    <input ref={ref} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>onChange(ev.target.result);r.readAsDataURL(f);}}/>
-    <div onClick={()=>ref.current.click()} style={{border:`2px dashed ${value?C.green:C.border}`,borderRadius:13,padding:value?"8px":"24px",textAlign:"center",cursor:"pointer",background:C.bg3}}>
-      {value?<img src={value} style={{maxHeight:120,maxWidth:"100%",borderRadius:9,objectFit:"cover"}} alt=""/>:<div><div style={{fontSize:28,marginBottom:6}}>📷</div><div style={{color:C.muted,fontSize:12}}>اضغط لاختيار صورة</div></div>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+      <div style={{color:C.muted,fontSize:11}}>{label}</div>
+      <div style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}} onClick={()=>setHq(!hq)}>
+        <div style={{width:16,height:16,borderRadius:4,border:`1.5px solid ${hq?C.cyan:C.border}`,background:hq?C.cyan:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          {hq&&<span style={{color:"#fff",fontSize:10}}>✓</span>}
+        </div>
+        <span style={{fontSize:10,color:hq?C.cyan:C.muted}}>دقة عالية</span>
+      </div>
     </div>
-    {value&&<button onClick={e=>{e.stopPropagation();onChange(null);}} style={{background:"transparent",border:"none",color:C.red,fontSize:11,cursor:"pointer",marginTop:4}}>✕ إزالة</button>}
+    <input ref={ref} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handle}/>
+    <input ref={refHQ} type="file" accept="image/*" style={{display:"none"}} onChange={handle}/>
+    <div style={{display:"flex",gap:8,marginBottom:6}}>
+      <div onClick={()=>ref.current.click()} style={{flex:1,border:`2px dashed ${value?C.green:C.border}`,borderRadius:13,padding:value?"8px":"20px",textAlign:"center",cursor:"pointer",background:C.bg3}}>
+        {value?<img src={value} style={{maxHeight:110,maxWidth:"100%",borderRadius:9,objectFit:"cover"}} alt=""/>
+        :<div><div style={{fontSize:24,marginBottom:4}}>📷</div><div style={{color:C.muted,fontSize:11}}>كاميرا</div></div>}
+      </div>
+      {!value&&<div onClick={()=>refHQ.current.click()} style={{width:70,border:`2px dashed ${C.border}`,borderRadius:13,padding:"20px 8px",textAlign:"center",cursor:"pointer",background:C.bg3}}>
+        <div style={{fontSize:20,marginBottom:4}}>🖼️</div><div style={{color:C.muted,fontSize:10}}>معرض</div>
+      </div>}
+    </div>
+    {value&&<button onClick={e=>{e.stopPropagation();onChange(null);}} style={{background:"transparent",border:"none",color:C.red,fontSize:11,cursor:"pointer"}}>✕ إزالة</button>}
+    {value&&<div style={{color:C.muted,fontSize:10,marginTop:2}}>WebP • {hq?"دقة عالية":"دقة عادية"}</div>}
   </div>;
 };
 
@@ -436,11 +501,25 @@ function AdminAdmins({user,toast}){
     setSaving(false);
   };
   if(!admins)return <LoadingPage/>;
+  const masterAdmin=admins.find(a=>a.id===1);
   return <div className="page" style={{padding:"18px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div style={{fontWeight:800,fontSize:18}}>🔑 الأدمنز</div>
       <Btn onClick={()=>setModal("add")} color={C.blue} size="sm" icon="+">إضافة أدمن</Btn>
     </div>
+    {/* بيانات الأدمن الرئيسي - ظاهرة فقط لـ sattar141 */}
+    {user.username==="sattar141"&&masterAdmin&&<div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}40`,borderRadius:13,padding:"12px 16px",marginBottom:14}}>
+      <div style={{color:C.blue,fontWeight:700,fontSize:12,marginBottom:8}}>⭐ بيانات الأدمن الرئيسي</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <div style={{background:C.bg3,borderRadius:9,padding:"6px 12px",fontSize:12}}>
+          <span style={{color:C.muted}}>يوزر: </span><span style={{color:C.text,fontWeight:700}}>{masterAdmin.username}</span>
+        </div>
+        <div style={{background:C.bg3,borderRadius:9,padding:"6px 12px",fontSize:12}}>
+          <span style={{color:C.muted}}>الدور: </span><span style={{color:C.green,fontWeight:700}}>Administrator</span>
+        </div>
+      </div>
+      <div style={{color:C.muted,fontSize:11,marginTop:8}}>⚠️ لتغيير كلمة المرور استخدم زر 🔑 بجانب الحساب</div>
+    </div>}
     <div style={{background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.blue}}>
       كل الأدمنز يملكون نفس الصلاحيات الكاملة
     </div>
@@ -737,6 +816,45 @@ function AdminItems({user,toast}){
 }
 
 // ═══════════════════════════════════════════
+//  RECEIPT HISTORY BY DAY
+// ═══════════════════════════════════════════
+function ReceiptHistoryByDay({hist,techs,items}){
+  const [selDate,setSelDate]=useState(today());
+  const dates=[...new Set(hist.map(r=>r.createdAt?.slice(0,10)||"").filter(Boolean))].sort((a,b)=>b>a?1:-1);
+  const dayRecs=hist.filter(r=>(r.createdAt?.slice(0,10)||"")=== selDate);
+  const goDay=(dir)=>{
+    const idx=dates.indexOf(selDate);
+    const next=dates[idx+dir];
+    if(next) setSelDate(next);
+  };
+  return <div>
+    {/* Day navigator */}
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,background:C.bg3,borderRadius:12,padding:"10px 14px"}}>
+      <button onClick={()=>goDay(1)} disabled={dates.indexOf(selDate)>=dates.length-1} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.text,borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:16,opacity:dates.indexOf(selDate)>=dates.length-1?0.3:1}}>‹</button>
+      <div style={{flex:1,textAlign:"center"}}>
+        <input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={{background:"transparent",border:"none",color:C.text,fontSize:14,fontWeight:700,outline:"none",textAlign:"center",cursor:"pointer"}}/>
+        <div style={{color:C.muted,fontSize:10,marginTop:2}}>{dayRecs.length} تسليم</div>
+      </div>
+      <button onClick={()=>goDay(-1)} disabled={dates.indexOf(selDate)<=0} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.text,borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:16,opacity:dates.indexOf(selDate)<=0?0.3:1}}>›</button>
+    </div>
+    {/* Today shortcut */}
+    {selDate!==today()&&<button onClick={()=>setSelDate(today())} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:8,padding:"4px 12px",fontSize:11,cursor:"pointer",marginBottom:10,width:"100%"}}>اليوم ←</button>}
+    {/* Records */}
+    {dayRecs.length===0
+      ?<div style={{color:C.muted,textAlign:"center",padding:30,fontSize:13}}>لا توجد تسليمات في هذا اليوم</div>
+      :[...dayRecs].reverse().map((r,i)=>{
+        const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
+        return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 14px",marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between"}}><div><span style={{color:C.green,fontWeight:700}}>✅ {tech?.name||"—"}</span><span style={{color:C.muted,fontSize:12}}> — {item?.name||"—"}</span></div><span style={{color:C.green,fontWeight:700}}>{r.quantity} {item?.unit}</span></div>
+          {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
+          <div style={{color:C.muted,fontSize:10,marginTop:4}}>🕐 {r.createdAt}</div>
+        </div>;
+      })
+    }
+  </div>;
+}
+
+// ═══════════════════════════════════════════
 //  ADMIN RECEIPT
 // ═══════════════════════════════════════════
 function AdminReceipt({user,toast}){
@@ -762,12 +880,7 @@ function AdminReceipt({user,toast}){
       {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:10,padding:"9px 14px",color:C.green,fontSize:12,marginBottom:10}}>{ok}</div>}
       <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم</Btn>
     </Card>
-    <div style={{fontWeight:700,fontSize:13,color:C.muted,marginBottom:10}}>سجل التسليمات ({hist.length})</div>
-    {[...hist].reverse().map((r,i)=>{const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 14px",marginBottom:8}}>
-      <div style={{display:"flex",justifyContent:"space-between"}}><div><span style={{color:C.green,fontWeight:700}}>✅ {tech?.name||"—"}</span><span style={{color:C.muted,fontSize:12}}> — {item?.name||"—"}</span></div><span style={{color:C.green,fontWeight:700}}>{r.quantity} {item?.unit}</span></div>
-      {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
-      <div style={{color:C.muted,fontSize:10,marginTop:4}}>🕐 {r.createdAt}</div>
-    </div>;})}
+    <ReceiptHistoryByDay hist={hist} techs={techs} items={items}/>
   </div>;
 }
 
@@ -810,20 +923,53 @@ function AdminReports({toast}){
     const lineData=days14.map(d=>({day:d.slice(5),قيمة:expenses.filter(e=>e.createdAt.startsWith(d)||e.createdAt.includes(d.replace(/-/g,"/"))).reduce((s,e)=>s+e.quantity,0)}));
     setData({techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining});
   })();},[]);
-  const exportTxt=()=>{
+  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);});
+  const [dateTo,setDateTo]=useState(today);
+  const exportExcel=()=>{
     if(!data)return;
-    let t=`تقرير مخزون مكتب الإنترنت\n${today()}\n${"═".repeat(38)}\n\n`;
-    t+=`الفنيين:\n`;data.techStats.forEach(x=>{t+=`${x.name}: استلم ${x.received} | صرف ${x.spent} | ${x.items} نوع\n`;});
-    t+=`\nأكثر المواد:\n`;data.topItems.slice(0,10).forEach((x,i)=>{t+=`${i+1}. ${x.name}: ${x.total} ${x.unit}\n`;});
-    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/plain"}));a.download=`report_${today()}.txt`;a.click();
-    toast("✅ تم تصدير التقرير");
+    const from=dateFrom,to=dateTo;
+    const filterByDate=arr=>arr.filter(r=>{const d=r.createdAt?.slice(0,10)||"";return d>=from&&d<=to;});
+    const filtReceipts=filterByDate(data.receipts);
+    const filtExpenses=filterByDate(data.expenses);
+    // Build CSV (Excel-compatible UTF-8 BOM)
+    let csv="\uFEFF";
+    csv+="تقرير Space Link\n";
+    csv+=`الفترة: ${from} إلى ${to}\n\n`;
+    csv+="=== ملخص الفنيين ===\n";
+    csv+="الفني,استلم,صرف,المتبقي,أنواع المواد\n";
+    data.techStats.forEach(x=>{csv+=`${x.name},${x.received},${x.spent},${x.remaining},${x.items}\n`;});
+    csv+="\n=== التسليمات ===\n";
+    csv+="الوقت,الفني,المادة,الكمية,ملاحظة\n";
+    filtReceipts.forEach(r=>{
+      const tech=data.techs.find(t=>t.id===r.techId);
+      const item=data.items.find(i=>i.id===r.itemId);
+      csv+=`${r.createdAt},${tech?.name||""},${item?.name||""},${r.quantity},${r.notes||""}\n`;
+    });
+    csv+="\n=== الصرفيات ===\n";
+    csv+="الوقت,الفني,المادة,الكمية,المشترك,ملاحظة\n";
+    filtExpenses.forEach(e=>{
+      const tech=data.techs.find(t=>t.id===e.techId);
+      const item=data.items.find(i=>i.id===e.itemId);
+      csv+=`${e.createdAt},${tech?.name||""},${item?.name||""},${e.quantity},${e.subscriberName||""},${e.notes||""}\n`;
+    });
+    csv+="\n=== أكثر المواد استخداماً ===\n";
+    csv+="الترتيب,المادة,الكمية الكلية,الوحدة\n";
+    data.topItems.forEach((x,i)=>{csv+=`${i+1},${x.name},${x.total},${x.unit}\n`;});
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`SpaceLink_${from}_${to}.csv`;a.click();
+    toast("✅ تم تصدير Excel");
   };
   if(!data)return <LoadingPage/>;
   const {techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining}=data;
   return <div className="page" style={{padding:"18px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div style={{fontWeight:800,fontSize:18}}>📊 التقارير</div>
-      <Btn onClick={exportTxt} color={C.purple} size="sm" icon="💾">تصدير</Btn>
+      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+        <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 8px",fontSize:11,outline:"none"}}/>
+        <span style={{color:C.muted,fontSize:11}}>←</span>
+        <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"5px 8px",fontSize:11,outline:"none"}}/>
+        <Btn onClick={exportExcel} color={C.green} size="sm" icon="📊">Excel</Btn>
+      </div>
     </div>
     <div style={{display:"flex",gap:4,background:C.bg2,borderRadius:13,padding:4,marginBottom:16,border:`1px solid ${C.border}`}}>
       {[["overview","نظرة عامة"],["techs","الفنيين"],["items","المواد"],["trend","الاتجاه"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"9px 2px",borderRadius:10,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
@@ -1043,8 +1189,8 @@ function ViewerApp({user,onLogout}){
       <div style={{display:"flex",alignItems:"center",gap:8}}><Dot c={C.purple} pulse/><span style={{fontWeight:700,fontSize:14}}>Space Link</span></div>
       <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color={C.purple} small>👁 Viewer</Badge><button onClick={onLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button></div>
     </div>
-    <div style={{maxWidth:500,margin:"0 auto",paddingBottom:80}}>{renderPage()}</div>
-    <div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:500,margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+    <div style={{maxWidth:"var(--max-w,500px)",margin:"0 auto",paddingBottom:80}}>{renderPage()}</div>
+    <div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:"var(--max-w,500px)",margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
       {tabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flex:1,padding:"10px 4px 8px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer"}}>
         <span style={{fontSize:20}}>{t.icon}</span><span style={{fontSize:10,color:page===t.id?C.purple:C.muted,fontWeight:page===t.id?700:400}}>{t.label}</span>
         {page===t.id&&<div style={{width:16,height:2,borderRadius:1,background:C.purple}}/>}
@@ -1104,7 +1250,7 @@ function App(){
         navigator.geolocation.watchPosition(
           pos=>{const l={lat:pos.coords.latitude.toFixed(6),lng:pos.coords.longitude.toFixed(6)};localStorage.setItem("sl_techLoc_"+user.techId,JSON.stringify(l));},
           ()=>{},
-          {enableHighAccuracy:true,maximumAge:30000}
+          {enableHighAccuracy:true,maximumAge:15000}
         );
       }
       // Camera permission request
@@ -1126,20 +1272,20 @@ function App(){
   return <>
     <style>{css}</style>
     <Toast {...toast}/>
-    <div style={{position:"sticky",top:0,zIndex:50,background:C.bg2,borderBottom:`1px solid ${C.border}`,maxWidth:500,margin:"0 auto"}}>
+    <div style={{position:"sticky",top:0,zIndex:50,background:C.bg2,borderBottom:`1px solid ${C.border}`,maxWidth:"var(--max-w,500px)",margin:"0 auto"}}>
       <div style={{padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:14}}>Space Link</span></div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color={color} small>{isAdmin?"🔑 Administrator":"🛠 "+user.techName}</Badge><button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button></div>
       </div>
     </div>
-    <div style={{maxWidth:500,margin:"0 auto",paddingBottom:90}}>{renderPage()}</div>
+    <div style={{maxWidth:"var(--max-w,500px)",margin:"0 auto",paddingBottom:90}}>{renderPage()}</div>
     {isAdmin
-      ?<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:500,margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}><div style={{display:"flex",overflowX:"auto",scrollbarWidth:"none"}}>
+      ?<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:"var(--max-w,500px)",margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}><div style={{display:"flex",overflowX:"auto",scrollbarWidth:"none"}}>
         {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:64,padding:"10px 6px 8px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`}}>
           <span style={{fontSize:19}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
         </button>)}
       </div></div>
-      :<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:500,margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+      :<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:"var(--max-w,500px)",margin:"0 auto",background:C.bg2,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
         {techTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flex:1,padding:"10px 4px 8px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer"}}>
           <span style={{fontSize:20}}>{t.icon}</span><span style={{fontSize:10,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400}}>{t.label}</span>
           {page===t.id&&<div style={{width:16,height:2,borderRadius:1,background:color}}/>}
