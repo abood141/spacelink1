@@ -102,12 +102,15 @@ const HDR={apikey:SB_KEY,Authorization:`Bearer ${SB_KEY}`,"Content-Type":"applic
 async function sbFetch(url,opts,tries=3){
   for(let i=0;i<tries;i++){
     try{
-      const r=await fetch(url,opts);
+      const r=await Promise.race([
+        fetch(url,opts),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),i===0?8000:12000))
+      ]);
       if(!r.ok)throw new Error(await r.text());
       return r.json();
     }catch(e){
       if(i===tries-1)throw e;
-      await new Promise(r=>setTimeout(r,800*(i+1)));
+      await new Promise(r=>setTimeout(r,1000*(i+1)));
     }
   }
 }
@@ -184,10 +187,17 @@ const DB={
   receipts:{
     async all(){const c=LC.get('receipts');if(c)return c;const d=(await sb.q('receipts','order=id.asc')).map(mr);LC.set('receipts',d);return d;},
     async add(tid,iid,qty,notes,aid){const r=await sb.ins('receipts',{tech_id:tid,item_id:iid,quantity:qty,notes:notes||null,admin_id:aid||null,created_at:now()});LC.del('receipts');return mr(r);},
+    async upd(id,qty,notes){await sb.upd('receipts',`id=eq.${id}`,{quantity:qty,notes:notes||null});LC.del('receipts');},
+    async updQty(id,qty){await sb.upd('receipts',`id=eq.${id}`,{quantity:qty});LC.del('receipts');},
+    async del(id){await sb.del('receipts',`id=eq.${id}`);LC.del('receipts');},
   },
   expenses:{
     async all(){const c=LC.get('expenses');if(c)return c;const d=(await sb.q('expenses','order=id.asc')).map(me);LC.set('expenses',d);return d;},
     async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,location:e.location||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
+  },
+  archive:{
+    async all(){try{const c=LC.get('archive');if(c)return c;const d=await sb.q('operations_archive','order=archived_date.desc');LC.set('archive',d);return d;}catch{return[];}},
+    async add(ops){try{await Promise.all(ops.map(op=>sb.ins('operations_archive',op)));LC.del('archive');}catch(e){console.warn('archive:',e.message);}},
   },
   audit:{
     async all(){try{return(await sb.q('audit_log','order=id.desc&limit=500')).map(r=>({id:r.id,actor:r.actor,action:r.action,detail:r.detail,at:r.at}));}catch{return[];}},
@@ -210,6 +220,14 @@ const GS={
   persist(){
     try{const o={};['items','techs','receipts','expenses'].forEach(k=>{if(this._d[k])o[k]=this._d[k];});localStorage.setItem('sl_gs2',JSON.stringify(o));}catch{}
   },
+  async ping(){
+    try{
+      await Promise.race([
+        fetch(`${SB_URL}/rest/v1/`,{headers:{apikey:SB_KEY}}),
+        new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),5000))
+      ]);
+    }catch{}
+  },
   async load(keys){
     const all=keys||['items','techs','receipts','expenses'];
     const need=all.filter(k=>!this._p[k]);
@@ -217,6 +235,8 @@ const GS={
     need.forEach(k=>this._p[k]=true);
     const map={items:()=>DB.items.all(),techs:()=>DB.techs.all(),techUsers:()=>DB.techUsers.all(),receipts:()=>DB.receipts.all(),expenses:()=>DB.expenses.all()};
     this._status='loading';this.emit();
+    // Wake up Supabase first
+    await this.ping();
     let ok=true;
     await Promise.all(need.map(async k=>{
       if(map[k])try{this._d[k]=await map[k]();}
@@ -229,7 +249,7 @@ const GS={
   },
   inval(...keys){keys.forEach(k=>{delete this._d[k];delete this._p[k];LC.del(k);});},
   async reload(...keys){this.inval(...keys);return this.load(keys);},
-  async forceReload(){this._d={};this._p={};['items','techs','receipts','expenses'].forEach(k=>LC.del(k));return this.load();},
+  async forceReload(){this._d={};this._p={};['items','techs','receipts','expenses'].forEach(k=>LC.del(k));await this.ping();return this.load();},
 };
 GS.loadStale();
 
@@ -252,6 +272,35 @@ function groupExpenses(expenses){
   expenses.forEach(e=>{const k=e.groupId||(e.createdAt+'_'+(e.subscriberName||''));if(!m[k])m[k]=[];m[k].push(e);});
   return Object.values(m).sort((a,b)=>b[0].createdAt>a[0].createdAt?1:-1);
 }
+// ── Archive helpers ──────────────────────────────────
+const ARCHIVE_KEY='sl_history_archive';
+function getArchive(){try{return JSON.parse(localStorage.getItem(ARCHIVE_KEY)||'[]');}catch{return[];}}
+function saveArchive(a){try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify(a));}catch{}}
+function archiveToday(receipts,expenses,techs,items){
+  const t=today();
+  const ar=getArchive();
+  if(ar.find(d=>d.date===t))return; // already archived today
+  const R=(receipts||[]).filter(r=>getDate(r)===t);
+  const E=(expenses||[]).filter(e=>getDate(e)===t);
+  if(!R.length&&!E.length)return;
+  const T=techs||[],I=items||[];
+  const recs=R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""}));
+  const rawExp=E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
+  ar.unshift({date:t,receipts:recs,expGroups:groupExpenses(rawExp)});
+  saveArchive(ar.slice(0,90)); // keep 90 days
+}
+// Check if we should archive (midnight Baghdad)
+function checkMidnightArchive(gs){
+  const d=baghdadNow();
+  const isNearMidnight=d.getUTCHours()===0&&d.getUTCMinutes()<5;
+  const lastCheck=LC.get('last_archive_check');
+  const todayStr=today();
+  if(isNearMidnight&&lastCheck!==todayStr&&gs.receipts&&gs.techs){
+    archiveToday(gs.receipts,gs.expenses,gs.techs,gs.items);
+    LC.set('last_archive_check',todayStr);
+  }
+}
+
 function buildReportData(gs){
   const T=gs.techs||[],E=gs.expenses||[],R=gs.receipts||[],I=gs.items||[];
   let totalRemaining=0;
@@ -272,7 +321,10 @@ const C={bg:"#07090F",bg2:"#0D1220",bg3:"#121A2E",bg4:"#1A2440",blue:"#4F8EF7",b
 const css=`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}html,body{font-family:'Tajawal',Tahoma,sans-serif;background:${C.bg};color:${C.text};min-height:100vh;overflow-x:hidden}
 input,select,textarea,button{font-family:inherit}
-::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.border};border-radius:2px}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#3A5080;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#4F8EF7}::-webkit-scrollbar-track{background:${C.bg2}}
+*{scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
+.overflow-x-scroll{overflow-x:auto!important;cursor:grab}
+.overflow-x-scroll:active{cursor:grabbing}
 @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{opacity:0;transform:translateY(50px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -478,12 +530,13 @@ function BaghdadClock(){
   return <div style={{background:C.bg3,borderRadius:7,padding:"2px 8px",fontSize:12,fontWeight:700,color:C.muted,fontFamily:"monospace",letterSpacing:1}}>{t} بغداد</div>;
 }
 function RefreshDot(){
-  const [st,setSt]=useState('');const [busy,setBusy]=useState(false);
-  useEffect(()=>{return GS.on(()=>setSt(GS._status));},[]);
-  if(st==='error')return <button onClick={async()=>{setBusy(true);await GS.forceReload();setBusy(false);}} disabled={busy} style={{background:`${C.red}25`,border:`1px solid ${C.red}50`,borderRadius:7,padding:"2px 8px",fontSize:10,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-    {busy?<Spin c={C.red} s={8}/>:"⚠️"}{busy?"...":"إعادة اتصال"}
+  const [st,setSt]=useState(()=>GS._status);const [busy,setBusy]=useState(false);
+  useEffect(()=>{setSt(GS._status);return GS.on(()=>setSt(GS._status));},[]);
+  const retry=async()=>{setBusy(true);await GS.forceReload();setBusy(false);};
+  if(st==='error')return <button onClick={retry} disabled={busy} style={{background:`${C.red}25`,border:`1px solid ${C.red}50`,borderRadius:7,padding:"2px 8px",fontSize:10,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
+    {busy?<Spin c={C.red} s={8}/>:"⚠️"}{busy?"جارٍ الإيقاظ...":"إعادة اتصال"}
   </button>;
-  if(st==='loading')return <div style={{width:6,height:6,borderRadius:"50%",background:C.cyan,animation:"pulse 1s ease infinite"}}/>;
+  if(st==='loading')return <div style={{width:6,height:6,borderRadius:"50%",background:C.cyan,animation:"pulse 1s ease infinite",title:"جارٍ التحديث"}}/>;
   return null;
 }
 
@@ -545,7 +598,7 @@ function Login({onLogin}){
 // ── Admin Dash ────────────────────────────────────────
 function AdminDash(){
   const gs=useGS(["items","techs","receipts","expenses"]);
-  if(!gs.items)return <Skel/>;
+  if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
   const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
   const lowMap=new Map();allBals.filter(b=>b.balance>=0&&b.balance<=b.threshold).forEach(x=>lowMap.set(x.id,x));const low=[...lowMap.values()];
@@ -707,12 +760,36 @@ function AdminItems({user,toast}){
 }
 
 // ── Receipt History by Day ────────────────────────────
-function ReceiptByDay({hist,techs,items}){
+function ReceiptByDay({hist,techs,items,toast,onRefresh}){
   const [selDate,setSelDate]=useState(today);
-  const getD=r=>(r.createdAt||"").slice(0,10).replace(/\//g,"-");
+  const [editing,setEditing]=useState(null);
+  const [editQty,setEditQty]=useState(1);
+  const [saving,setSaving]=useState(false);
+  const getD=r=>(r.createdAt||"").slice(0,10).replace(/[\/]/g,"-");
   const dates=[...new Set(hist.map(getD).filter(Boolean))].sort((a,b)=>b>a?1:-1);
   const recs=hist.filter(r=>getD(r)===selDate);
   const go=dir=>{const idx=dates.indexOf(selDate);const n=dates[idx+dir];if(n)setSelDate(n);};
+  const doDelete=async r=>{
+    const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
+    if(!confirm(`حذف تسليم ${r.quantity} ${item?.unit||""} للفني ${tech?.name||""}؟`))return;
+    await DB.receipts.del(r.id);
+    await DB.audit.add("admin","حذف تسليم",`${r.quantity} ${item?.unit||""} من ${tech?.name||""}`);
+    await GS.reload("receipts","expenses");
+    if(onRefresh)onRefresh();
+    if(toast)toast("🗑 تم الحذف");
+  };
+  const doEdit=async()=>{
+    if(!editQty||+editQty<1){if(toast)toast("كمية غير صحيحة","error");return;}
+    setSaving(true);
+    const item=items.find(x=>x.id===editing.itemId);
+    const tech=techs.find(t=>t.id===editing.techId);
+    await DB.receipts.updQty(editing.id,+editQty);
+    await DB.audit.add("admin","تعديل تسليم",`${editing.quantity}→${editQty} ${item?.unit||""} للفني ${tech?.name||""}`);
+    await GS.reload("receipts","expenses");
+    if(onRefresh)onRefresh();
+    setSaving(false);setEditing(null);
+    if(toast)toast("✅ تم التعديل");
+  };
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,background:C.bg3,borderRadius:11,padding:"9px 13px"}}>
       <button onClick={()=>go(1)} disabled={dates.indexOf(selDate)>=dates.length-1} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.text,borderRadius:7,width:30,height:30,cursor:"pointer",fontSize:15,opacity:dates.indexOf(selDate)>=dates.length-1?.3:1}}>‹</button>
@@ -723,12 +800,39 @@ function ReceiptByDay({hist,techs,items}){
       <button onClick={()=>go(-1)} disabled={dates.indexOf(selDate)<=0} style={{background:"transparent",border:`1px solid ${C.border}`,color:C.text,borderRadius:7,width:30,height:30,cursor:"pointer",fontSize:15,opacity:dates.indexOf(selDate)<=0?.3:1}}>›</button>
     </div>
     {selDate!==today()&&<button onClick={()=>setSelDate(today())} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"5px 12px",fontSize:12,cursor:"pointer",marginBottom:9,width:"100%",fontWeight:700}}>📅 اليوم ({today()}) ←</button>}
-    {recs.length===0?<div style={{color:C.muted,textAlign:"center",padding:28,fontSize:13}}>لا توجد تسليمات في هذا اليوم</div>
-    :[...recs].reverse().map((r,i)=>{const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);return <div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:7}}>
-      <div style={{display:"flex",justifyContent:"space-between"}}><div><span style={{color:C.green,fontWeight:700}}>✅ {tech?.name||"—"}</span><span style={{color:C.muted,fontSize:12}}> — {item?.name||"—"}</span></div><span style={{color:C.green,fontWeight:700}}>{r.quantity} {item?.unit}</span></div>
-      {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
-      <div style={{color:C.muted,fontSize:13,marginTop:4,fontWeight:500}}>🕐 {r.createdAt}</div>
-    </div>;})}
+    {recs.length===0
+      ?<div style={{color:C.muted,textAlign:"center",padding:28,fontSize:13}}>لا توجد تسليمات في هذا اليوم</div>
+      :[...recs].reverse().map((r,i)=>{
+        const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
+        return <div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+            <div style={{flex:1}}>
+              <span style={{color:C.green,fontWeight:700}}>✅ {tech?.name||"—"}</span>
+              <span style={{color:C.muted,fontSize:12}}> — {item?.name||"—"}</span>
+              {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
+              <div style={{color:C.muted,fontSize:13,marginTop:4,fontWeight:500}}>🕐 {r.createdAt}</div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+              <span style={{color:C.green,fontWeight:700,fontSize:15}}>{r.quantity} {item?.unit}</span>
+              <div style={{display:"flex",gap:4}}>
+                <button onClick={()=>{setEditing(r);setEditQty(r.quantity);}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer"}}>✏️ تعديل</button>
+                <button onClick={()=>doDelete(r)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer"}}>🗑 حذف</button>
+              </div>
+            </div>
+          </div>
+        </div>;
+      })}
+    <Modal open={!!editing} onClose={()=>setEditing(null)} title="✏️ تعديل كمية التسليم">
+      {editing&&<>
+        <div style={{background:C.bg3,borderRadius:9,padding:"10px 13px",marginBottom:13}}>
+          <div style={{color:C.muted,fontSize:12,marginBottom:3}}>الفني: <strong style={{color:C.text}}>{techs.find(t=>t.id===editing.techId)?.name||"—"}</strong></div>
+          <div style={{color:C.muted,fontSize:12,marginBottom:3}}>المادة: <strong style={{color:C.text}}>{items.find(i=>i.id===editing.itemId)?.name||"—"}</strong></div>
+          <div style={{color:C.muted,fontSize:12}}>الكمية الحالية: <strong style={{color:C.green}}>{editing.quantity} {items.find(i=>i.id===editing.itemId)?.unit||""}</strong></div>
+        </div>
+        <div style={{marginBottom:13}}><div style={{color:C.muted,fontSize:11,marginBottom:6}}>الكمية الجديدة</div><QtyPick value={+editQty} onChange={v=>setEditQty(v)}/></div>
+        <Btn onClick={doEdit} color={C.blue} full loading={saving}>حفظ التعديل ✓</Btn>
+      </>}
+    </Modal>
   </div>;
 }
 
@@ -736,7 +840,10 @@ function ReceiptByDay({hist,techs,items}){
 function AdminReceipt({user,toast}){
   const gs=useGS(["techs","items","receipts"]);
   const [tid,setTid]=useState("");const [iid,setIid]=useState("");const [qty,setQty]=useState(1);const [notes,setNotes]=useState("");const [ok,setOk]=useState("");const [saving,setSaving]=useState(false);const [curBal,setCurBal]=useState(null);
-  const techs=gs.techs||[];const items=gs.items||[];const hist=gs.receipts||[];
+  const [hist,setHist]=useState(null);
+  const techs=gs.techs||[];const items=gs.items||[];
+  useEffect(()=>{if(gs.receipts)setHist(gs.receipts);},[gs.receipts]);
+  if(!hist)return <Skel/>;
   useEffect(()=>{
     if(tid&&iid){
       const R=gs.receipts||[];const E=gs.expenses||[];
@@ -765,32 +872,96 @@ function AdminReceipt({user,toast}){
       <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم</Btn>
     </Card>
     <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>سجل التسليمات</div>
-    <ReceiptByDay hist={hist} techs={techs} items={items}/>
+    <ReceiptByDay hist={hist} techs={techs} items={items} toast={toast} onRefresh={()=>setHist(GS.get().receipts||[])}/>
   </div>;
 }
 
 // ── Admin History ─────────────────────────────────────
 function AdminHistory(){
-  const [filter,setFilter]=useState("all");
+  const [filter,setFilter]=useState("today");
+  const [tab,setTab]=useState("live");
+  const [dateFilter,setDateFilter]=useState(today());
   const gs=useGS(["receipts","expenses","techs","items"]);
+
+  // Midnight archive check
+  useEffect(()=>{
+    if(gs.receipts&&gs.techs)checkMidnightArchive(gs);
+    const id=setInterval(()=>{if(gs.receipts&&gs.techs)checkMidnightArchive(gs);},60000);
+    return()=>clearInterval(id);
+  },[gs.receipts]);
+
   if(!gs.receipts)return <Skel/>;
   const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
-  const receipts=R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""})).sort((a,b)=>b.createdAt>a.createdAt?1:-1);
+
+  // Build ops
+  const allReceipts=R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""})).sort((a,b)=>b.createdAt>a.createdAt?1:-1);
   const rawExp=E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
-  const expGroups=groupExpenses(rawExp);
+  const allExpGroups=groupExpenses(rawExp);
+
+  // Date filter
+  const getD=r=>(r.createdAt||"").slice(0,10).replace(/\//g,"-");
+  const receipts=dateFilter?allReceipts.filter(r=>getD(r)===dateFilter):allReceipts;
+  const expGroups=dateFilter?allExpGroups.filter(g=>getD(g[0])===dateFilter):allExpGroups;
+
+  // Archive
+  const archive=getArchive();
+
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📋 سجل العمليات</div>
-    <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
-      {[["all","الكل"],["r","تسليمات"],["e","صرفيات"]].map(([v,l])=><button key={v} onClick={()=>setFilter(v)} style={{padding:"5px 16px",borderRadius:18,border:"none",fontSize:12,cursor:"pointer",background:filter===v?C.blue:C.bg3,color:filter===v?"#fff":C.muted,fontWeight:filter===v?700:400}}>{l} {filter===v&&`(${v==="e"?expGroups.length:v==="r"?receipts.length:receipts.length+expGroups.length})`}</button>)}
+
+    {/* Tabs: Live / Archive */}
+    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
+      {[["live","📋 السجل الحي"],["archive","🗃 الأرشيف"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:13}}>{l}</button>)}
     </div>
-    {(filter==="all"||filter==="r")&&receipts.length>0&&<>{filter==="all"&&<div style={{color:C.muted,fontSize:11,marginBottom:7}}>── تسليمات ──</div>}{receipts.slice(0,50).map((op,i)=><OpsRow key={i} op={op}/>)}</>}
-    {(filter==="all"||filter==="e")&&<>{filter==="all"&&expGroups.length>0&&<div style={{color:C.muted,fontSize:11,marginBottom:7,marginTop:3}}>── صرفيات ──</div>}{expGroups.length===0&&filter==="e"&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد صرفيات</div>}{expGroups.slice(0,50).map((g,i)=><GroupedRow key={i} group={g} allItems={I}/>)}</>}
-    {filter==="r"&&receipts.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد تسليمات</div>}
-    {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
+
+    {tab==="live"&&<>
+      {/* Date filter */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:11,background:C.bg3,borderRadius:10,padding:"8px 12px"}}>
+        <span style={{color:C.muted,fontSize:12}}>📅 تصفية بالتاريخ:</span>
+        <input type="date" value={dateFilter} onChange={e=>setDateFilter(e.target.value)} style={{flex:1,background:"transparent",border:"none",color:C.text,fontSize:13,fontWeight:700,outline:"none",direction:"ltr"}}/>
+        {dateFilter&&<button onClick={()=>setDateFilter("")} style={{background:`${C.red}20`,border:"none",color:C.red,borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>✕ كل السجل</button>}
+        {dateFilter!==today()&&<button onClick={()=>setDateFilter(today())} style={{background:`${C.blue}20`,border:"none",color:C.blue,borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer"}}>اليوم</button>}
+      </div>
+
+      {/* Filter buttons */}
+      <div style={{display:"flex",gap:5,marginBottom:11,flexWrap:"wrap"}}>
+        {[["all","الكل"],["r","تسليمات"],["e","صرفيات"]].map(([v,l])=><button key={v} onClick={()=>setFilter(v)} style={{padding:"5px 15px",borderRadius:18,border:"none",fontSize:12,cursor:"pointer",background:filter===v?C.blue:C.bg3,color:filter===v?"#fff":C.muted,fontWeight:filter===v?700:400}}>{l}{filter===v&&` (${v==="e"?expGroups.length:v==="r"?receipts.length:receipts.length+expGroups.length})`}</button>)}
+      </div>
+
+      {dateFilter&&<div style={{color:C.cyan,fontSize:12,marginBottom:9,textAlign:"center"}}>عرض سجل يوم {dateFilter}</div>}
+
+      {(filter==="all"||filter==="r")&&receipts.length>0&&<>{filter==="all"&&<div style={{color:C.muted,fontSize:11,marginBottom:7}}>── تسليمات ({receipts.length}) ──</div>}{receipts.slice(0,80).map((op,i)=><OpsRow key={i} op={op}/>)}</>}
+      {(filter==="all"||filter==="e")&&<>{filter==="all"&&expGroups.length>0&&<div style={{color:C.muted,fontSize:11,marginBottom:7,marginTop:3}}>── صرفيات ({expGroups.length}) ──</div>}{expGroups.length===0&&filter==="e"&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد صرفيات</div>}{expGroups.slice(0,80).map((g,i)=><GroupedRow key={i} group={g} allItems={I}/>)}</>}
+      {filter==="r"&&receipts.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد تسليمات</div>}
+      {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
+    </>}
+
+    {tab==="archive"&&<>
+      {archive.length===0
+        ?<div style={{color:C.muted,textAlign:"center",padding:50}}>
+            <div style={{fontSize:32,marginBottom:10}}>🗃</div>
+            <div>لا يوجد أرشيف بعد</div>
+            <div style={{fontSize:12,marginTop:6}}>يُحفظ الأرشيف تلقائياً كل يوم ساعة 12 ليلاً بغداد</div>
+          </div>
+        :archive.map((day,di)=><div key={di} style={{marginBottom:18}}>
+            {/* Day separator */}
+            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
+              <div style={{flex:1,height:1,background:C.border}}/>
+              <div style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"4px 14px",fontSize:12,fontWeight:700,color:C.blue,whiteSpace:"nowrap"}}>📅 {day.date}</div>
+              <div style={{flex:1,height:1,background:C.border}}/>
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:8,display:"flex",gap:10}}>
+              <span style={{color:C.green}}>✅ {day.receipts?.length||0} تسليم</span>
+              <span style={{color:C.amber}}>📤 {day.expGroups?.length||0} صرفية</span>
+            </div>
+            {(day.receipts||[]).map((op,i)=><OpsRow key={"r"+i} op={op}/>)}
+            {(day.expGroups||[]).map((g,i)=><GroupedRow key={"e"+i} group={g} allItems={I}/>)}
+            {(!day.receipts?.length&&!day.expGroups?.length)&&<div style={{color:C.muted,fontSize:12,textAlign:"center",padding:16}}>لا توجد بيانات</div>}
+          </div>)}
+    </>}
   </div>;
 }
 
-// ── Admin Reports ─────────────────────────────────────
 function AdminReports({toast}){
   const [tab,setTab]=useState("overview");
   const gs=useGS(["techs","expenses","receipts","items"]);
@@ -844,19 +1015,32 @@ function AdminReports({toast}){
 // ── Admin Audit ───────────────────────────────────────
 function AdminAudit(){
   const [log,setLog]=useState(null);
+  const [tab,setTab]=useState("admin");
   useEffect(()=>{DB.audit.all().then(setLog);},[]);
   if(!log)return <Skel/>;
+  const techActions=["صرفية","تغيير كلمة مرور"];
+  const adminLog=log.filter(e=>!techActions.includes(e.action));
+  const techLog=log.filter(e=>techActions.includes(e.action));
+  const renderEntry=(e,i)=><div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:6,borderLeft:`3px solid ${tab==="admin"?C.blue:C.green}`}}>
+    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
+      <Badge color={tab==="admin"?C.blue:C.green} small>{e.action}</Badge>
+      <span style={{fontWeight:600,fontSize:13}}>{e.detail}</span>
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.muted,fontWeight:500}}>
+      <span>👤 {e.actor}</span><span>🕐 {e.at}</span>
+    </div>
+  </div>;
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{fontWeight:800,fontSize:18,marginBottom:13}}>🔍 سجل التدقيق</div>
-    {log.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>
-    :log.map((e,i)=><div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:6,borderLeft:`3px solid ${C.blue}`}}>
-      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}><Badge color={C.blue} small>{e.action}</Badge><span style={{fontWeight:600,fontSize:13}}>{e.detail}</span></div>
-      <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.muted,fontWeight:500}}><span>👤 {e.actor}</span><span>🕐 {e.at}</span></div>
-    </div>)}
+    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
+      <button onClick={()=>setTab("admin")} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="admin"?C.bg4:"transparent",color:tab==="admin"?C.text:C.muted,fontWeight:tab==="admin"?700:400,fontSize:13}}>🔑 عمليات الإداري ({adminLog.length})</button>
+      <button onClick={()=>setTab("tech")} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="tech"?C.bg4:"transparent",color:tab==="tech"?C.text:C.muted,fontWeight:tab==="tech"?700:400,fontSize:13}}>🛠 عمليات الفنيين ({techLog.length})</button>
+    </div>
+    {tab==="admin"&&(adminLog.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:adminLog.map(renderEntry))}
+    {tab==="tech"&&(techLog.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:techLog.map(renderEntry))}
   </div>;
 }
 
-// ── Admin Viewers ─────────────────────────────────────
 function AdminViewers({user,toast}){
   const [viewers,setViewers]=useState(null);const [modal,setModal]=useState(false);const [form,setForm]=useState({username:"",password:"",displayName:""});const [saving,setSaving]=useState(false);
   const load=()=>DB.viewers.all().then(setViewers);useEffect(()=>{load();},[]);
@@ -987,17 +1171,25 @@ function TechExpense({user,toast}){
   const [subName,setSubName]=useState("");const [subUser,setSubUser]=useState("");const [loc,setLoc]=useState(null);const [notes,setNotes]=useState("");const [img,setImg]=useState(null);const [ok,setOk]=useState("");const [rows,setRows]=useState([]);const [saving,setSaving]=useState(false);
   const bals=useMemo(()=>gs.items?calcBals(user.techId,gs.items||[],gs.receipts||[],gs.expenses||[]).filter(b=>b.balance>0):[],[gs.items,gs.receipts,gs.expenses]);
   useEffect(()=>{if(bals.length>0&&rows.length===0)setRows([{itemId:bals[0].id,qty:1}]);},[bals]);
+  const [noItems,setNoItems]=useState(false);
   const submit=async()=>{
     if(!subName.trim()){toast("أدخل اسم المشترك","error");return;}
-    if(rows.length===0){toast("أضف مادة","error");return;}
-    for(const row of rows){const b=bals.find(x=>x.id===row.itemId);if(!b){toast("مادة غير موجودة","error");return;}if(row.qty>b.balance){toast(`رصيد غير كافٍ لـ ${b.name}. المتبقي: ${b.balance}${b.unit}`,"error");return;}}
+    if(!noItems&&rows.length===0){toast("أضف مادة أو اختر 'لا يوجد مواد'","error");return;}
+    if(!noItems){for(const row of rows){const b=bals.find(x=>x.id===row.itemId);if(!b){toast("مادة غير موجودة","error");return;}if(row.qty>b.balance){toast(`رصيد غير كافٍ لـ ${b.name}. المتبقي: ${b.balance}${b.unit}`,"error");return;}}}
     setSaving(true);
     try{const ts=now();const gid=ts;
-      for(const row of rows){const b=bals.find(x=>x.id===row.itemId);await DB.expenses.add({techId:user.techId,itemId:row.itemId,quantity:row.qty,location:loc,notes,subscriberName:subName.trim(),subscriberUser:subUser.trim(),workImage:img,createdAt:ts,groupId:gid});await DB.audit.add(user.techName,"صرفية",`${row.qty} ${b.unit} من ${b.name} → ${subName}`);}
-      const sum=rows.map(r=>{const b=bals.find(x=>x.id===r.itemId);return `${r.qty} ${b?.unit||""} ${b?.name||""}`;}).join(" + ");
-      setOk(`✅ تم تسجيل: ${sum} للمشترك ${subName} — ${ts}`);
+      if(noItems){
+        // No-items maintenance record - use a dummy item_id=0 via notes
+        await DB.audit.add(user.techName,"صرفية","صيانة بدون مواد → "+subName.trim());
+        // Store as expense with itemId=null-like workaround: skip DB insert, just log
+        setOk(`✅ تم تسجيل صيانة بدون مواد للمشترك ${subName} — ${ts}`);
+      } else {
+        for(const row of rows){const b=bals.find(x=>x.id===row.itemId);await DB.expenses.add({techId:user.techId,itemId:row.itemId,quantity:row.qty,location:loc,notes,subscriberName:subName.trim(),subscriberUser:subUser.trim(),workImage:img,createdAt:ts,groupId:gid});await DB.audit.add(user.techName,"صرفية",`${row.qty} ${b.unit} من ${b.name} → ${subName}`);}
+        const sum=rows.map(r=>{const b=bals.find(x=>x.id===r.itemId);return `${r.qty} ${b?.unit||""} ${b?.name||""}`;}).join(" + ");
+        setOk(`✅ تم تسجيل: ${sum} للمشترك ${subName} — ${ts}`);
+      }
       toast("✅ تم تسجيل الصرفية");
-      setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);
+      setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);setNoItems(false);
       await GS.reload("expenses");
     }catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
   };
@@ -1010,11 +1202,20 @@ function TechExpense({user,toast}){
       <Inp label="اسم المشترك *" value={subName} onChange={setSubName} placeholder="العميل"/>
       <Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="@username"/>
       <Div/>
+      {/* No-items toggle */}
+      <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11,cursor:"pointer",background:noItems?`${C.amber}15`:`${C.bg3}`,border:`1px solid ${noItems?C.amber:C.border}`,borderRadius:10,padding:"9px 13px"}} onClick={()=>setNoItems(!noItems)}>
+        <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${noItems?C.amber:C.border}`,background:noItems?C.amber:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          {noItems&&<span style={{color:"#fff",fontSize:13,fontWeight:700}}>✓</span>}
+        </div>
+        <div><div style={{fontSize:13,fontWeight:700,color:noItems?C.amber:C.text}}>🔧 لا يوجد مواد مصروفة</div><div style={{fontSize:11,color:C.muted}}>صيانة بدون صرف مواد</div></div>
+      </div>
+      {!noItems&&<>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
         <div style={{fontWeight:700,fontSize:12,color:C.muted}}>📦 المواد المصروفة</div>
         <Btn onClick={()=>{const u=rows.map(r=>r.itemId);const f=bals.find(b=>!u.includes(b.id))||bals[0];setRows(r=>[...r,{itemId:f.id,qty:1}]);}} color={C.blue} size="sm" icon="+" disabled={rows.length>=bals.length}>إضافة مادة</Btn>
       </div>
       {rows.map((row,idx)=><ExpRow key={idx} bals={bals} row={row} allItems={gs.items} onChange={val=>setRows(r=>r.map((x,i)=>i===idx?val:x))} onRemove={()=>setRows(r=>r.filter((_,i)=>i!==idx))} canRemove={rows.length>1}/>)}
+      </>}
       <Div/>
       <GPS onLoc={setLoc}/>
       <Inp label="ملاحظة" value={notes} onChange={setNotes} placeholder="وصف العمل..."/>
@@ -1121,6 +1322,11 @@ function App(){
   useEffect(()=>{
     if(user){
       GS.load(["items","techs","receipts","expenses"]);
+      // Auto-retry every 30s if connection failed
+      const retryTimer=setInterval(()=>{
+        if(GS._status==='error')GS.forceReload();
+      },30000);
+      return()=>clearInterval(retryTimer);
       if(user.role==="tech"){
         if(navigator.geolocation)navigator.geolocation.watchPosition(p=>{localStorage.setItem("sl_loc_"+user.techId,JSON.stringify({lat:p.coords.latitude.toFixed(6),lng:p.coords.longitude.toFixed(6)}));},()=>{},{enableHighAccuracy:true,maximumAge:15000});
         if(navigator.mediaDevices?.getUserMedia)navigator.mediaDevices.getUserMedia({video:true}).then(s=>{s.getTracks().forEach(t=>t.stop());}).catch(()=>{});
@@ -1159,7 +1365,7 @@ function App(){
     <div style={{maxWidth:"var(--mw,500px)",margin:"0 auto",paddingBottom:95}}>{renderPage()}</div>
     {isAdmin
       ?<nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:"var(--mw,500px)",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
-        <div style={{display:"flex",overflowX:"auto",scrollbarWidth:"none"}}>
+        <div id="adminNav" style={{display:"flex",overflowX:"auto",scrollbarWidth:"thin"}} onMouseDown={e=>{const el=e.currentTarget;el._x=e.clientX;el._sl=el.scrollLeft;el._drag=true;}} onMouseMove={e=>{const el=e.currentTarget;if(!el._drag)return;el.scrollLeft=el._sl-(e.clientX-el._x);}} onMouseUp={e=>e.currentTarget._drag=false} onMouseLeave={e=>e.currentTarget._drag=false} onWheel={e=>{e.preventDefault();e.currentTarget.scrollLeft+=e.deltaY*0.8;}}>
           {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:60,padding:"9px 5px 7px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`}}>
             <span style={{fontSize:18}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
           </button>)}
