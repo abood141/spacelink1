@@ -840,10 +840,8 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
 function AdminReceipt({user,toast}){
   const gs=useGS(["techs","items","receipts"]);
   const [tid,setTid]=useState("");const [iid,setIid]=useState("");const [qty,setQty]=useState(1);const [notes,setNotes]=useState("");const [ok,setOk]=useState("");const [saving,setSaving]=useState(false);const [curBal,setCurBal]=useState(null);
-  const [hist,setHist]=useState(null);
   const techs=gs.techs||[];const items=gs.items||[];
-  useEffect(()=>{if(gs.receipts)setHist(gs.receipts);},[gs.receipts]);
-  if(!hist)return <Skel/>;
+  const hist=gs.receipts||null;
   useEffect(()=>{
     if(tid&&iid){
       const R=gs.receipts||[];const E=gs.expenses||[];
@@ -852,6 +850,7 @@ function AdminReceipt({user,toast}){
       setCurBal(rec-sp);
     }else setCurBal(null);
   },[tid,iid,gs.receipts,gs.expenses]);
+  if(!hist)return <Skel/>;
   const submit=async()=>{
     if(!tid||!iid){toast("اختر الفني والمادة","error");return;}setSaving(true);
     try{const t=techs.find(x=>x.id===+tid);const it=items.find(x=>x.id===+iid);const r=await DB.receipts.add(+tid,+iid,qty,notes,user.id);await DB.audit.add(user.displayName,"تسليم مادة",`${qty} ${it.unit} → ${t.name}`);await GS.reload("receipts","expenses");setOk(`✅ تم تسليم ${qty} ${it.unit} للفني ${t.name} — ${r.createdAt}`);setQty(1);setNotes("");toast("✅ تم تسجيل التسليم");}
@@ -872,7 +871,7 @@ function AdminReceipt({user,toast}){
       <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم</Btn>
     </Card>
     <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>سجل التسليمات</div>
-    <ReceiptByDay hist={hist} techs={techs} items={items} toast={toast} onRefresh={()=>setHist(GS.get().receipts||[])}/>
+    <ReceiptByDay hist={hist} techs={techs} items={items} toast={toast} onRefresh={()=>{GS.reload("receipts","expenses");}}/>
   </div>;
 }
 
