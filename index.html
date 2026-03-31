@@ -9,6 +9,8 @@
 <title>Space Link</title>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://icpqrnzvxjexdzwfkcjm.supabase.co" crossorigin>
+<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;Space Link&quot;,&quot;short_name&quot;:&quot;SpaceLink&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%2307090F&quot;,&quot;theme_color&quot;:&quot;%234F8EF7&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%232563EB'/%3E%3Ctext y='.9em' font-size='70' x='15'%3E🌐%3C/text%3E%3C/svg%3E&quot;,&quot;sizes&quot;:&quot;any&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html{text-rendering:optimizeSpeed;-webkit-font-smoothing:antialiased}
@@ -134,6 +136,33 @@ const LC={
   set(k,v){try{localStorage.setItem('sl_'+k,JSON.stringify(v))}catch{}},
   del(k){try{localStorage.removeItem('sl_'+k)}catch{}},
 };
+
+// ── Background Sync Queue ─────────────────────────────
+const SQ={
+  _key:'sl_sync_queue',
+  get(){return LC.get('sync_queue')||[];},
+  add(op){const q=this.get();q.push({...op,id:Date.now(),ts:now()});LC.set('sync_queue',q);},
+  remove(id){LC.set('sync_queue',this.get().filter(o=>o.id!==id));},
+  async flush(){
+    const q=this.get();if(!q.length)return;
+    let flushed=0;
+    for(const op of q){
+      try{
+        if(op.type==='expense'){
+          await DB.expenses.add(op.data);
+          await DB.audit.add(op.actor,'صرفية (offline)','تم إرسالها لاحقاً: '+op.data.subscriberName);
+        }else if(op.type==='receipt'){
+          await DB.receipts.add(op.data.techId,op.data.itemId,op.data.quantity,op.data.notes,op.data.adminId);
+        }
+        this.remove(op.id);flushed++;
+      }catch(e){console.warn('SQ flush failed:',e.message);break;}
+    }
+    if(flushed>0){await GS.reload('receipts','expenses');LC.set('sync_queue',this.get());}
+    return flushed;
+  }
+};
+// Flush queue when online
+window.addEventListener('online',()=>{SQ.flush();});
 
 // ── DB Layer ─────────────────────────────────────────
 const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image}:null;
@@ -524,6 +553,36 @@ function BalRow({b,allItems}){
 }
 
 // ── Baghdad Clock + Refresh ───────────────────────────
+// PWA install prompt
+let _pwaPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();_pwaPrompt=e;});
+function PWAInstall(){
+  const [show,setShow]=useState(false);
+  useEffect(()=>{
+    const t=setInterval(()=>{if(_pwaPrompt)setShow(true);},1000);
+    return()=>clearInterval(t);
+  },[]);
+  if(!show)return null;
+  return <button onClick={async()=>{if(_pwaPrompt){_pwaPrompt.prompt();const r=await _pwaPrompt.userChoice;if(r.outcome==='accepted')setShow(false);}}} style={{background:`linear-gradient(135deg,${C.blueD},${C.blue})`,border:"none",color:"#fff",borderRadius:9,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:5,boxShadow:`0 2px 10px ${C.blue}50`}}>
+    📲 تثبيت التطبيق
+  </button>;
+}
+function OfflineBadge(){
+  const [offline,setOffline]=useState(!navigator.onLine);
+  const [pending,setPending]=useState(0);
+  useEffect(()=>{
+    const on=()=>{setOffline(false);SQ.flush().then(n=>{if(n>0)setPending(0);});};
+    const off=()=>setOffline(true);
+    window.addEventListener('online',on);window.addEventListener('offline',off);
+    return()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};
+  },[]);
+  useEffect(()=>{setPending(SQ.get().length);},[offline]);
+  if(!offline&&!pending)return null;
+  return <div style={{background:offline?`${C.red}25`:`${C.amber}25`,border:`1px solid ${offline?C.red:C.amber}50`,borderRadius:7,padding:"2px 8px",fontSize:10,color:offline?C.red:C.amber,fontWeight:700}}>
+    {offline?`📵 بدون إنترنت${pending?` (${pending} معلقة)`:""}`:`🔄 إرسال ${pending} عملية...`}
+  </div>;
+}
+
 function BaghdadClock(){
   const [t,setT]=useState("");
   useEffect(()=>{const tick=()=>{const d=baghdadNow();setT(`${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}:${String(d.getUTCSeconds()).padStart(2,"0")}`);};tick();const id=setInterval(tick,1000);return()=>clearInterval(id);},[]);
@@ -607,7 +666,11 @@ function AdminDash(){
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
   const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>r.createdAt?.includes(d.replace(/-/g,"/")||r.createdAt?.startsWith(d))).length,"صرفية":E.filter(e=>e.createdAt?.includes(d.replace(/-/g,"/")||e.createdAt?.startsWith(d))).length}));
   const pie=top.slice(0,5).map((it,i)=>({name:it.name,value:it.total,fill:C.chart[i]}));
-  const totR=R.reduce((s,r)=>s+r.quantity,0),totS=E.reduce((s,e)=>s+e.quantity,0);
+  const todayStr=today();
+  const isToday=d=>d&&(d.startsWith(todayStr)||d.replace(/\//g,"-").startsWith(todayStr));
+  const todayR=R.filter(r=>isToday(r.createdAt));
+  const todayE=E.filter(e=>isToday(e.createdAt));
+  const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
   const techSum=T.map(t=>{const b=calcBals(t.id,I,R,E);return{...t,bal:b.reduce((s,x)=>s+x.balance,0),low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length,cnt:b.length};});
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، Administrator 👋</div></div>
@@ -616,7 +679,7 @@ function AdminDash(){
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
-      {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"إجمالي استلام"],["📤",totS,C.amber,"إجمالي صرف"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 15px"}} glow={c}><div style={{fontSize:20,marginBottom:3}}>{ic}</div><div style={{fontSize:22,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{l}</div></Card>)}
+      {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 15px"}} glow={c}><div style={{fontSize:20,marginBottom:3}}>{ic}</div><div style={{fontSize:22,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{l}</div></Card>)}
     </div>
     <Card style={{padding:"14px 11px",marginBottom:12}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:10,color:C.muted}}>📊 آخر 7 أيام</div>
@@ -632,13 +695,36 @@ function AdminDash(){
         </div>)}</div>
       </div>
     </Card>}
-    <Card style={{padding:"14px 13px"}}>
+    <Card style={{padding:"14px 13px",marginBottom:12}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>👷 ملخص الفنيين</div>
       {techSum.length===0?<div style={{color:C.muted,fontSize:13,textAlign:"center",padding:14}}>لا يوجد فنيين</div>
-      :techSum.map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-        <div><div style={{fontWeight:700}}>{t.name}</div><div style={{color:C.muted,fontSize:11}}>{t.cnt} نوع مادة</div></div>
-        <div style={{textAlign:"right"}}><div style={{color:t.bal>0?C.green:C.red,fontWeight:700}}>{t.bal} وحدة</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
-      </div>)}
+      :techSum.map(t=>{
+        // Check last activity
+        const lastExp=E.filter(e=>e.techId===t.id).reduce((m,e)=>e.createdAt>m?e.createdAt:m,"");
+        const daysSince=lastExp?Math.floor((Date.now()-new Date(lastExp.replace(/[\/]/g,"-")))/86400000):-1;
+        const inactive=daysSince>1;
+        return <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{fontWeight:700}}>{t.name}</div>{inactive&&daysSince>=0&&<Badge color={C.red} small>😴 {daysSince} يوم بدون نشاط</Badge>}</div>
+            <div style={{color:C.muted,fontSize:11}}>{t.cnt} نوع · {lastExp?`آخر نشاط: ${lastExp.slice(0,10)}`:"لا يوجد نشاط"}</div>
+          </div>
+          <div style={{textAlign:"right"}}><div style={{color:t.bal>0?C.green:C.red,fontWeight:700}}>{t.bal} وحدة</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
+        </div>;
+      })}
+    </Card>
+    {/* Daily summary */}
+    <Card style={{padding:"14px 13px"}}>
+      <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
+      {(()=>{
+        const subs=[...new Set(todayE.map(e=>e.subscriberName).filter(Boolean))];
+        return <div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:9}}>
+            {[["📦",todayR.length,C.green,"تسليم"],["📤",todayE.length,C.amber,"صرفية"],["👥",subs.length,C.cyan,"مشترك"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:18}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+          </div>
+          {subs.length>0&&<div style={{fontSize:11,color:C.muted}}>المشتركين: {subs.join(" · ")}</div>}
+          {todayR.length===0&&todayE.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center"}}>لا توجد عمليات اليوم بعد</div>}
+        </div>;
+      })()}
     </Card>
   </div>;
 }
@@ -714,6 +800,47 @@ function ResetPw({tu,onDone}){
 }
 
 // ── Admin Items ───────────────────────────────────────
+function BarcodeScanner({onResult,onClose}){
+  const vidRef=useRef();const [err,setErr]=useState("");const [scanning,setScanning]=useState(false);
+  useEffect(()=>{
+    let stream=null;let animFrame=null;
+    const canvas=document.createElement("canvas");const ctx=canvas.getContext("2d");
+    const start=async()=>{
+      try{
+        stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+        vidRef.current.srcObject=stream;
+        await vidRef.current.play();
+        setScanning(true);
+        const scan=()=>{
+          if(!vidRef.current||!stream)return;
+          canvas.width=vidRef.current.videoWidth;canvas.height=vidRef.current.videoHeight;
+          ctx.drawImage(vidRef.current,0,0);
+          try{
+            // Use BarcodeDetector if available
+            if('BarcodeDetector' in window){
+              new BarcodeDetector().detect(canvas).then(codes=>{
+                if(codes.length>0){onResult(codes[0].rawValue);stream.getTracks().forEach(t=>t.stop());}
+                else animFrame=requestAnimationFrame(scan);
+              });
+            } else animFrame=requestAnimationFrame(scan);
+          }catch{animFrame=requestAnimationFrame(scan);}
+        };
+        animFrame=requestAnimationFrame(scan);
+      }catch(e){setErr("تعذر الوصول للكاميرا: "+e.message);}
+    };
+    start();
+    return()=>{if(stream)stream.getTracks().forEach(t=>t.stop());if(animFrame)cancelAnimationFrame(animFrame);};
+  },[]);
+  return <div style={{textAlign:"center"}}>
+    {err?<div style={{color:C.red,padding:20}}>{err}</div>:<>
+      <video ref={vidRef} style={{width:"100%",borderRadius:12,maxHeight:300,objectFit:"cover",background:"#000"}} playsInline muted/>
+      {scanning&&<div style={{color:C.cyan,fontSize:12,marginTop:8}}>📷 جارٍ المسح... وجّه الكاميرا نحو الباركود</div>}
+      {!('BarcodeDetector' in window)&&<div style={{color:C.amber,fontSize:11,marginTop:6}}>⚠ المتصفح لا يدعم مسح الباركود تلقائياً</div>}
+    </>}
+    <Inp label="أو أدخل الرمز يدوياً" value="" onChange={v=>{if(v.trim())onResult(v.trim());}} placeholder="رمز الباركود..."/>
+  </div>;
+}
+
 function AdminItems({user,toast}){
   const gs=useGS(["items"]);
   const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
@@ -732,7 +859,11 @@ function AdminItems({user,toast}){
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
       <div style={{fontWeight:800,fontSize:18}}>🔧 المعدات</div>
-      <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
+      <div style={{display:"flex",gap:5}}>
+        <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">طلب شراء</Btn>
+        <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
+        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
+      </div>
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -749,6 +880,33 @@ function AdminItems({user,toast}){
         </div>
       </Card>)}
     </div>
+    <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 قائمة طلبات الشراء">
+      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو اقتربت من حد التنبيه</div>
+      {items.filter(it=>{
+        const bal=it._bal||0;
+        return bal<=it.threshold;
+      }).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
+      {items.map((it,i)=>{
+        const display=it.name+" (تنبيه: "+it.threshold+" "+it.unit+")";
+        return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>الحد: {it.threshold} {it.unit}</div></div>
+          <Badge color={C.amber} small>يحتاج مراجعة</Badge>
+        </div>;
+      })}
+      <Btn onClick={()=>{
+        let msg="🛒 *قائمة طلبات الشراء — Space Link*
+
+";
+        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}
+`;});
+        msg+="
+📅 "+today();
+        window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");
+      }} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
+    </Modal>
+    <Modal open={modal==="scan"} onClose={()=>setModal(null)} title="📷 Barcode Scanner">
+      <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
+    </Modal>
     <Modal open={modal==="form"} onClose={()=>setModal(null)} title={editing?"✏️ تعديل معدة":"➕ إضافة معدة"}>
       <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة"/><Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/></div>
@@ -876,6 +1034,61 @@ function AdminReceipt({user,toast}){
 }
 
 // ── Admin History ─────────────────────────────────────
+function SubscriberHistory({expenses,techs,items}){
+  const [search,setSearch]=useState("");const [selected,setSelected]=useState(null);
+  // Get unique subscribers
+  const subs=[...new Map(expenses.filter(e=>e.subscriberName).map(e=>[e.subscriberName,{name:e.subscriberName,user:e.subscriberUser||"",visits:0,lastVisit:"",totalItems:0}])).values()];
+  subs.forEach(s=>{
+    const visits=expenses.filter(e=>e.subscriberName===s.name);
+    s.visits=[...new Set(visits.map(e=>e.groupId||e.createdAt))].length;
+    s.lastVisit=visits.reduce((m,e)=>e.createdAt>m?e.createdAt:m,"");
+    s.totalItems=visits.reduce((n,e)=>n+e.quantity,0);
+    s.techs=[...new Set(visits.map(e=>techs.find(t=>t.id===e.techId)?.name).filter(Boolean))];
+  });
+  subs.sort((a,b)=>b.visits-a.visits);
+  const filtered=search?subs.filter(s=>s.name.includes(search)||(s.user&&s.user.includes(search))):subs;
+
+  if(selected){
+    const visits=expenses.filter(e=>e.subscriberName===selected.name);
+    const groups=groupExpenses(visits.map(e=>({...e,type:"صرفية",techName:techs.find(t=>t.id===e.techId)?.name||"—",itemName:items.find(i=>i.id===e.itemId)?.name||"—",unit:items.find(i=>i.id===e.itemId)?.unit||""})));
+    return <div>
+      <button onClick={()=>setSelected(null)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:8,padding:"5px 13px",fontSize:12,cursor:"pointer",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>← رجوع</button>
+      <div style={{background:C.bg3,borderRadius:12,padding:"13px 15px",marginBottom:13}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:3}}>👤 {selected.name}</div>
+        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:5}}>@{selected.user}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
+          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg4,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:ic?17:14}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+        </div>
+        <div style={{color:C.muted,fontSize:11,marginTop:7}}>آخر زيارة: {selected.lastVisit}</div>
+        <div style={{color:C.muted,fontSize:11}}>الفنيين: {selected.techs.join(" · ")}</div>
+      </div>
+      <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:8}}>سجل الزيارات ({groups.length})</div>
+      {groups.map((g,i)=><GroupedRow key={i} group={g} allItems={items}/>)}
+    </div>;
+  }
+
+  return <div>
+    <Inp value={search} onChange={setSearch} placeholder="🔍 بحث باسم المشترك أو اليوزر..."/>
+    <div style={{color:C.muted,fontSize:11,marginBottom:9}}>{subs.length} مشترك · {filtered.length} ظاهر</div>
+    {filtered.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد نتائج</div>
+    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:11,padding:"11px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"border-color .15s"}}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=C.blue}
+      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:14}}>{s.name}</div>
+          {s.user&&<div style={{color:C.cyan,fontSize:12}}>@{s.user}</div>}
+          <div style={{color:C.muted,fontSize:11,marginTop:2}}>🔧 {s.visits} زيارة · آخر: {s.lastVisit?.slice(0,10)}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <Badge color={C.blue} small>{s.totalItems} وحدة</Badge>
+          <div style={{color:C.muted,fontSize:10,marginTop:3}}>👷 {s.techs.slice(0,2).join("، ")}</div>
+        </div>
+      </div>
+    </div>)}
+  </div>;
+}
+
 function AdminHistory(){
   const [filter,setFilter]=useState("today");
   const [tab,setTab]=useState("live");
@@ -908,9 +1121,9 @@ function AdminHistory(){
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📋 سجل العمليات</div>
 
-    {/* Tabs: Live / Archive */}
+    {/* Tabs: Live / Subscribers / Archive */}
     <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
-      {[["live","📋 السجل الحي"],["archive","🗃 الأرشيف"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:13}}>{l}</button>)}
+      {[["live","📋 الحي"],["subs","👥 المشتركين"],["archive","🗃 الأرشيف"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
     </div>
 
     {tab==="live"&&<>
@@ -934,6 +1147,8 @@ function AdminHistory(){
       {filter==="r"&&receipts.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد تسليمات</div>}
       {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
     </>}
+
+    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I}/>}
 
     {tab==="archive"&&<>
       {archive.length===0
@@ -968,6 +1183,16 @@ function AdminReports({toast}){
   const [dateTo,setDateTo]=useState(today);
   if(!gs.techs)return <Skel/>;
   const {techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining}=buildReportData(gs);
+  const shareWhatsApp=()=>{
+    const {techStats,totalRemaining}=buildReportData(gs);
+    let msg=`📊 *تقرير Space Link*\n`;
+    msg+=`📅 ${dateFrom} → ${dateTo}\n\n`;
+    msg+=`👷 *ملخص الفنيين:*\n`;
+    techStats.forEach(t=>{msg+=`• ${t.name}: استلم ${t.received} | صرف ${t.spent} | متبقي ${t.remaining}\n`;});
+    msg+=`\n📊 المتبقي الإجمالي: ${totalRemaining} وحدة\n`;
+    msg+=`\n🔗 Space Link — نظام إدارة مكتب الإنترنت`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,'_blank');
+  };
   const exportExcel=()=>{
     const fd=arr=>arr.filter(r=>{const d=r.createdAt?.slice(0,10)||"";return d>=dateFrom&&d<=dateTo;});
     let csv="\uFEFF";csv+=`تقرير Space Link\nالفترة: ${dateFrom} إلى ${dateTo}\n\n`;
@@ -989,6 +1214,7 @@ function AdminReports({toast}){
         <span style={{color:C.muted,fontSize:11}}>←</span>
         <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"4px 7px",fontSize:11,outline:"none",direction:"ltr"}}/>
         <Btn onClick={exportExcel} color={C.green} size="sm" icon="📊">Excel</Btn>
+        <Btn onClick={shareWhatsApp} color={C.greenD} size="sm" icon="💬">واتساب</Btn>
       </div>
     </div>
     <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:14,border:`1px solid ${C.border}`}}>
@@ -1001,12 +1227,48 @@ function AdminReports({toast}){
       <Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>آخر 14 يوم</div><LineSVG data={lineData} dataKey="قيمة" color={C.amber} h={130}/></Card>
     </div>}
     {tab==="techs"&&(techStats.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا يوجد فنيين</div>
-    :techStats.map((t,i)=><Card key={i} style={{padding:"13px 15px",marginBottom:9}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><div style={{fontWeight:700,fontSize:14}}>👷 {t.name}</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["متبقي",t.remaining,C.cyan],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:18,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
-    </Card>))}
-    {tab==="items"&&<><Card style={{padding:"14px 11px",marginBottom:12}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>الأكثر استخداماً</div><BarSVG data={topItems.slice(0,6).map(x=>({day:x.name.slice(0,7),total:x.total}))} keys={["total"]} colors={[C.amber]} h={150}/></Card>
-    {topItems.map((it,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:11,background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:6}}><div style={{fontSize:17,fontWeight:700,color:C.chart[i]||C.muted,width:28,textAlign:"center"}}>#{i+1}</div><div style={{flex:1,fontWeight:600}}>{it.name}</div><div style={{color:C.amber,fontWeight:700}}>{it.total} {it.unit}</div></div>)}</>}
+    :<div>
+      {/* Ranking */}
+      <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 14px",marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>🏆 ترتيب الفنيين (حسب الصرفيات)</div>
+        {[...techStats].sort((a,b)=>b.spent-a.spent).map((t,i)=>{
+          const medal=["🥇","🥈","🥉"][i]||`#${i+1}`;
+          const pts=t.spent*10+t.items*5;
+          return <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:i<techStats.length-1?`1px solid ${C.border}`:"none"}}>
+            <span style={{fontSize:18,width:28}}>{medal}</span>
+            <div style={{flex:1}}><div style={{fontWeight:700}}>{t.name}</div><div style={{color:C.muted,fontSize:11}}>صرف {t.spent} | أنواع {t.items}</div></div>
+            <div style={{textAlign:"right"}}><div style={{color:C.amber,fontWeight:700,fontSize:15}}>{pts} نقطة</div><div style={{color:C.muted,fontSize:10}}>نشاط</div></div>
+          </div>;
+        })}
+      </div>
+      {techStats.map((t,i)=><Card key={i} style={{padding:"13px 15px",marginBottom:9}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
+          <div style={{fontWeight:700,fontSize:14}}>👷 {t.name}</div>
+          <div style={{display:"flex",gap:5}}>
+            {t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}
+            <Badge color={C.amber} small>⭐ {t.spent*10+t.items*5} نقطة</Badge>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["متبقي",t.remaining,C.cyan],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:18,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
+      </Card>)}
+    </div>)}
+    {tab==="items"&&<>
+      <Card style={{padding:"14px 11px",marginBottom:12}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>📊 الأكثر استخداماً</div><BarSVG data={topItems.slice(0,6).map(x=>({day:x.name.slice(0,5),total:x.total}))} keys={["total"]} colors={[C.amber]} h={150}/></Card>
+      {topItems.map((it,i)=>{
+        // Consumption trend for this item (last 7 days)
+        const days7=[...Array(7)].map((_,j)=>{const d=new Date();d.setDate(d.getDate()-6+j);return d.toISOString().slice(0,10);});
+        const trend=days7.map(d=>({day:d.slice(8),قيمة:expenses.filter(e=>e.itemId===items.find(x=>x.name===it.name)?.id&&(e.createdAt?.startsWith(d)||e.createdAt?.includes(d.replace(/-/g,"/")))).reduce((s,e)=>s+e.quantity,0)}));
+        const hasTrend=trend.some(t=>t["قيمة"]>0);
+        return <Card key={i} style={{marginBottom:8,padding:"11px 13px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:hasTrend?9:0}}>
+            <div style={{fontSize:17,fontWeight:700,color:C.chart[i]||C.muted,width:28,textAlign:"center"}}>#{i+1}</div>
+            <div style={{flex:1,fontWeight:600}}>{it.name}</div>
+            <div style={{color:C.amber,fontWeight:700}}>{it.total} {it.unit}</div>
+          </div>
+          {hasTrend&&<LineSVG data={trend} dataKey="قيمة" color={C.chart[i]||C.amber} h={60}/>}
+        </Card>;
+      })}
+    </>}
     {tab==="trend"&&<Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:10}}>الاستهلاك اليومي</div><LineSVG data={lineData} dataKey="قيمة" color={C.blue} h={200}/></Card>}
   </div>;
 }
@@ -1190,7 +1452,18 @@ function TechExpense({user,toast}){
       toast("✅ تم تسجيل الصرفية");
       setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);setNoItems(false);
       await GS.reload("expenses");
-    }catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
+    }catch(e){
+      // If offline, queue for later
+      if(!navigator.onLine){
+        if(!noItems){
+          const ts=now();const gid=ts;
+          rows.forEach(row=>{SQ.add({type:'expense',actor:user.techName,data:{techId:user.techId,itemId:row.itemId,quantity:row.qty,location:loc,notes,subscriberName:subName.trim(),subscriberUser:subUser.trim(),workImage:img,createdAt:ts,groupId:gid}});});
+          setOk(`📵 تم الحفظ محلياً — سيُرسل عند عودة الإنترنت`);
+          setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);setNoItems(false);
+          toast("📵 محفوظ offline");
+        }
+      } else {toast("خطأ: "+e.message,"error");}
+    }setSaving(false);
   };
   if(!gs.items)return <Skel/>;
   return <div className="page" style={{padding:"16px 14px"}}>
@@ -1320,7 +1593,21 @@ function App(){
   useEffect(()=>{DB.admins.seed();},[]);
   useEffect(()=>{
     if(user){
-      GS.load(["items","techs","receipts","expenses"]);
+      GS.load(["items","techs","receipts","expenses"]).then(gs=>{
+        // Flush offline queue after load
+        SQ.flush();
+        // Low stock notification
+        if(user.role==="admin"&&gs.items&&gs.receipts&&gs.expenses){
+          const lowItems=gs.items.filter(it=>{
+            const rec=(gs.receipts||[]).filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
+            const sp=(gs.expenses||[]).filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
+            return (rec-sp)<=it.threshold;
+          });
+          if(lowItems.length>0){
+            setTimeout(()=>showToast(`⚠️ ${lowItems.length} مواد تحت حد التنبيه: ${lowItems.slice(0,2).map(i=>i.name).join("، ")}${lowItems.length>2?"...":""}`, "warn"),1500);
+          }
+        }
+      });
       // Auto-retry every 30s if connection failed
       const retryTimer=setInterval(()=>{
         if(GS._status==='error')GS.forceReload();
@@ -1355,7 +1642,7 @@ function App(){
       <div style={{padding:"9px 15px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:7}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:13}}>Space Link</span></div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          <BaghdadClock/><RefreshDot/>
+          <BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/>
           <Badge color={color} small>{isAdmin?"🔑 Administrator":"🛠 "+user.techName}</Badge>
           <button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button>
         </div>
@@ -1364,7 +1651,7 @@ function App(){
     <div style={{maxWidth:"var(--mw,500px)",margin:"0 auto",paddingBottom:95}}>{renderPage()}</div>
     {isAdmin
       ?<nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:"var(--mw,500px)",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
-        <div id="adminNav" style={{display:"flex",overflowX:"auto",scrollbarWidth:"thin"}} onMouseDown={e=>{const el=e.currentTarget;el._x=e.clientX;el._sl=el.scrollLeft;el._drag=true;}} onMouseMove={e=>{const el=e.currentTarget;if(!el._drag)return;el.scrollLeft=el._sl-(e.clientX-el._x);}} onMouseUp={e=>e.currentTarget._drag=false} onMouseLeave={e=>e.currentTarget._drag=false} onWheel={e=>{e.preventDefault();e.currentTarget.scrollLeft+=e.deltaY*0.8;}}>
+        <div id="adminNav" style={{display:"flex",overflowX:"auto",scrollbarWidth:"thin",cursor:"grab"}} onMouseDown={e=>{const el=e.currentTarget;el._x=e.clientX;el._sl=el.scrollLeft;el._drag=true;el.style.cursor="grabbing";}} onMouseMove={e=>{const el=e.currentTarget;if(!el._drag)return;el.scrollLeft=el._sl-(e.clientX-el._x);}} onMouseUp={e=>{e.currentTarget._drag=false;e.currentTarget.style.cursor="grab";}} onMouseLeave={e=>{e.currentTarget._drag=false;e.currentTarget.style.cursor="grab";}} onWheel={e=>{e.preventDefault();e.currentTarget.scrollLeft+=e.deltaY;}} onTouchStart={e=>{const el=e.currentTarget;el._tx=e.touches[0].clientX;el._tsl=el.scrollLeft;}} onTouchMove={e=>{const el=e.currentTarget;if(el._tx===undefined)return;el.scrollLeft=el._tsl-(e.touches[0].clientX-el._tx);}}>  
           {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:60,padding:"9px 5px 7px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`}}>
             <span style={{fontSize:18}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
           </button>)}
