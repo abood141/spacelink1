@@ -1613,9 +1613,14 @@ function App(){
   },[user]);
   useEffect(()=>{
     const el=navRef.current;if(!el)return;
-    const h=e=>{if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();el.scrollLeft+=e.deltaY;}};
-    el.addEventListener('wheel',h,{passive:false});
-    return()=>el.removeEventListener('wheel',h);
+    const h=e=>{
+      const t=e.target;
+      const isEmpty=t===document.body||t===document.documentElement||t.id==='root';
+      const isNav=el.contains(t);
+      if((isEmpty||isNav)&&Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();el.scrollLeft+=e.deltaY;}
+    };
+    document.addEventListener('wheel',h,{passive:false});
+    return()=>document.removeEventListener('wheel',h);
   });
 
   const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"},{id:"admins",icon:"🔑",label:"Admins"}];
