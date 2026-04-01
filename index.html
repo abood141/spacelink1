@@ -894,13 +894,9 @@ function AdminItems({user,toast}){
         </div>;
       })}
       <Btn onClick={()=>{
-        let msg="🛒 *قائمة طلبات الشراء — Space Link*
-
-";
-        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}
-`;});
-        msg+="
-📅 "+today();
+        let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";
+        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}\n`;});
+        msg+="\n📅 "+today();
         window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");
       }} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
     </Modal>
