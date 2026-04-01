@@ -351,9 +351,8 @@ const css=`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@40
 *{box-sizing:border-box;margin:0;padding:0}html,body{font-family:'Tajawal',Tahoma,sans-serif;background:${C.bg};color:${C.text};min-height:100vh;overflow-x:hidden}
 input,select,textarea,button{font-family:inherit}
 ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#3A5080;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#4F8EF7}::-webkit-scrollbar-track{background:${C.bg2}}
-*{scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
-.overflow-x-scroll{overflow-x:auto!important;cursor:grab}
-.overflow-x-scroll:active{cursor:grabbing}
+.hnav{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-behavior:smooth}
+.hnav::-webkit-scrollbar{display:none}
 @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{opacity:0;transform:translateY(50px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -732,7 +731,6 @@ function AdminDash(){
 // ── Admin Techs ───────────────────────────────────────
 function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
   const bals=useMemo(()=>calcBals(tech.id,items,receipts,expenses),[tech.id,items,receipts,expenses]);
-  const tu=useMemo(()=>null,[]);
   const [tuData,setTuData]=useState(null);
   useEffect(()=>{DB.techUsers.byTech(tech.id).then(setTuData);},[tech.id]);
   const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold).length;
@@ -1580,7 +1578,7 @@ function ViewerItems(){
 // ── Root App ──────────────────────────────────────────
 function App(){
   const [user,setUser]=useState(()=>{try{const s=localStorage.getItem("sl_session");return s?JSON.parse(s):null;}catch{return null;}});
-  const [page,setPage]=useState("dash");
+  const [page,setPage]=useState("dash");const navRef=useRef();
   const [toast,setToast]=useState({msg:"",visible:false,type:"success"});
   const showToast=useCallback((msg,type="success")=>{setToast({msg,visible:true,type});setTimeout(()=>setToast(t=>({...t,visible:false})),2600);},[]);
   const doLogin=u=>{setUser(u);setPage("dash");};
@@ -1604,17 +1602,21 @@ function App(){
           }
         }
       });
-      // Auto-retry every 30s if connection failed
+      if(user.role==="tech"&&navigator.geolocation){
+        navigator.geolocation.watchPosition(p=>{localStorage.setItem("sl_loc_"+user.techId,JSON.stringify({lat:p.coords.latitude.toFixed(6),lng:p.coords.longitude.toFixed(6)}));},()=>{},{enableHighAccuracy:true,maximumAge:15000});
+      }
       const retryTimer=setInterval(()=>{
         if(GS._status==='error')GS.forceReload();
       },30000);
       return()=>clearInterval(retryTimer);
-      if(user.role==="tech"){
-        if(navigator.geolocation)navigator.geolocation.watchPosition(p=>{localStorage.setItem("sl_loc_"+user.techId,JSON.stringify({lat:p.coords.latitude.toFixed(6),lng:p.coords.longitude.toFixed(6)}));},()=>{},{enableHighAccuracy:true,maximumAge:15000});
-        if(navigator.mediaDevices?.getUserMedia)navigator.mediaDevices.getUserMedia({video:true}).then(s=>{s.getTracks().forEach(t=>t.stop());}).catch(()=>{});
-      }
     }
   },[user]);
+  useEffect(()=>{
+    const el=navRef.current;if(!el)return;
+    const h=e=>{if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();el.scrollLeft+=e.deltaY;}};
+    el.addEventListener('wheel',h,{passive:false});
+    return()=>el.removeEventListener('wheel',h);
+  });
 
   const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"},{id:"admins",icon:"🔑",label:"Admins"}];
   const techTabs=[{id:"dash",icon:"📦",label:"رصيدي"},{id:"expense",icon:"📤",label:"صرفية"},{id:"history",icon:"📋",label:"سجلي"},{id:"profile",icon:"👤",label:"ملفي"}];
@@ -1647,7 +1649,7 @@ function App(){
     <div style={{maxWidth:"var(--mw,500px)",margin:"0 auto",paddingBottom:95}}>{renderPage()}</div>
     {isAdmin
       ?<nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:"var(--mw,500px)",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
-        <div id="adminNav" style={{display:"flex",overflowX:"auto",scrollbarWidth:"thin",cursor:"grab"}} onMouseDown={e=>{const el=e.currentTarget;el._x=e.clientX;el._sl=el.scrollLeft;el._drag=true;el.style.cursor="grabbing";}} onMouseMove={e=>{const el=e.currentTarget;if(!el._drag)return;el.scrollLeft=el._sl-(e.clientX-el._x);}} onMouseUp={e=>{e.currentTarget._drag=false;e.currentTarget.style.cursor="grab";}} onMouseLeave={e=>{e.currentTarget._drag=false;e.currentTarget.style.cursor="grab";}} onWheel={e=>{e.preventDefault();e.currentTarget.scrollLeft+=e.deltaY;}} onTouchStart={e=>{const el=e.currentTarget;el._tx=e.touches[0].clientX;el._tsl=el.scrollLeft;}} onTouchMove={e=>{const el=e.currentTarget;if(el._tx===undefined)return;el.scrollLeft=el._tsl-(e.touches[0].clientX-el._tx);}}>  
+        <div ref={navRef} className="hnav">  
           {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:60,padding:"9px 5px 7px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`}}>
             <span style={{fontSize:18}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
           </button>)}
