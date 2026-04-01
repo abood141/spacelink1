@@ -660,7 +660,7 @@ function Login({onLogin}){
 }
 
 // ── Admin Dash ────────────────────────────────────────
-function AdminDash(){
+function AdminDash({user}){
   const gs=useGS(["items","techs","receipts","expenses"]);
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
   const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
@@ -678,7 +678,7 @@ function AdminDash(){
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
   const techSum=T.map(t=>{const b=calcBals(t.id,I,R,E);return{...t,bal:b.reduce((s,x)=>s+x.balance,0),low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length,cnt:b.length};});
   return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، Administrator 👋</div></div>
+    <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div></div>
     {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}18,${C.red}10)`,border:`1px solid ${C.amber}50`,borderRadius:12,padding:"11px 13px",marginBottom:14}}>
       <div style={{color:C.amber,fontWeight:700,fontSize:13,marginBottom:5}}>⚠ {low.length} مواد تحت حد التنبيه</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
@@ -1641,7 +1641,7 @@ function App(){
 
   const renderPage=()=>{
     if(isAdmin)switch(page){
-      case"dash":return<AdminDash/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"viewers":return<AdminViewers user={user} toast={showToast}/>;case"admins":return<AdminAdmins user={user} toast={showToast}/>;default:return<AdminDash/>;
+      case"dash":return<AdminDash user={user}/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"viewers":return<AdminViewers user={user} toast={showToast}/>;case"admins":return<AdminAdmins user={user} toast={showToast}/>;default:return<AdminDash user={user}/>;
     }
     switch(page){case"dash":return<TechDash user={user}/>;case"expense":return<TechExpense user={user} toast={showToast}/>;case"history":return<TechHistory user={user}/>;case"profile":return<TechProfile user={user} onLogout={doLogout} toast={showToast}/>;default:return<TechDash user={user}/>;}
   };
@@ -1661,7 +1661,7 @@ function App(){
       </div>
       <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:7}}>
         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/></div>
-        <Badge color={color} small>{isAdmin?"🔑 Administrator":"🛠 "+user.techName}</Badge>
+        <Badge color={color} small>{isAdmin?"🔑 "+(user.displayName||user.username):"🛠 "+user.techName}</Badge>
         <button onClick={doLogout} style={{background:`${C.red}15`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:8,padding:"8px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",width:"100%"}}>🚪 خروج</button>
       </div>
     </div>
@@ -1671,7 +1671,7 @@ function App(){
           <div style={{display:"flex",alignItems:"center",gap:7}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:13}}>Space Link</span></div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             <BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/>
-            <Badge color={color} small>{isAdmin?"🔑 Admin":"🛠 "+user.techName}</Badge>
+            <Badge color={color} small>{isAdmin?"🔑 "+(user.displayName||user.username):"🛠 "+user.techName}</Badge>
             <button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button>
           </div>
         </div>
