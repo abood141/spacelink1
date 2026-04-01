@@ -664,7 +664,7 @@ function AdminDash(){
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
   const top=Object.values(um).sort((a,b)=>b.total-a.total).slice(0,6);
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
-  const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>r.createdAt?.includes(d.replace(/-/g,"/")||r.createdAt?.startsWith(d))).length,"صرفية":E.filter(e=>e.createdAt?.includes(d.replace(/-/g,"/")||e.createdAt?.startsWith(d))).length}));
+  const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>r.createdAt?.includes(d.replace(/-/g,"/"))||r.createdAt?.startsWith(d)).length,"صرفية":E.filter(e=>e.createdAt?.includes(d.replace(/-/g,"/"))||e.createdAt?.startsWith(d)).length}));
   const pie=top.slice(0,5).map((it,i)=>({name:it.name,value:it.total,fill:C.chart[i]}));
   const todayStr=today();
   const isToday=d=>d&&(d.startsWith(todayStr)||d.replace(/\//g,"-").startsWith(todayStr));
