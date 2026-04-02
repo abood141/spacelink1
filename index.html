@@ -258,10 +258,10 @@ const SQ={
 window.addEventListener('online',()=>{SQ.flush();});
 
 // ── DB Layer ─────────────────────────────────────────
-const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image}:null;
+const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image,stock:r.stock||0}:null;
 const mt=r=>r?{id:r.id,name:r.name,phone:r.phone,createdAt:r.created_at}:null;
 const mtu=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,techId:r.tech_id,createdAt:r.created_at}:null;
-const mv=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,displayName:r.display_name,createdAt:r.created_at}:null;
+
 const mr=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,notes:r.notes,adminId:r.admin_id,createdAt:r.created_at}:null;
 const me=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,subscriberName:r.subscriber_name,subscriberUser:r.subscriber_user,notes:r.notes,workImage:r.work_image,location:r.location,groupId:r.group_id,createdAt:r.created_at}:null;
 
@@ -269,8 +269,9 @@ const DB={
   items:{
     async all(){const c=LC.get('items');if(c)return c;const d=(await sb.q('items','order=id.asc')).map(mi);LC.set('items',d);return d;},
     async find(id){return(await DB.items.all()).find(i=>i.id===+id)||null;},
-    async add(item){const r=await sb.ins('items',{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,created_at:now()});LC.del('items');return mi(r);},
-    async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null});LC.del('items');},
+    async add(item){const r=await sb.ins('items',{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,stock:item.stock||0,created_at:now()});LC.del('items');return mi(r);},
+    async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,stock:item.stock||0});LC.del('items');},
+    async updStock(id,stock){await sb.upd('items',`id=eq.${id}`,{stock});LC.del('items');},
     async del(id){await sb.del('items',`id=eq.${id}`);LC.del('items');},
   },
   techs:{
@@ -287,13 +288,7 @@ const DB={
     async add(tid,u,p){const r=await sb.ins('tech_users',{tech_id:tid,username:u,password_hash:hashPw(p),created_at:now()});LC.del('techUsers');return mtu(r);},
     async changePw(id,p){await sb.upd('tech_users',`id=eq.${id}`,{password_hash:hashPw(p)});LC.del('techUsers');},
   },
-  viewers:{
-    async all(){const c=LC.get('viewers');if(c)return c;const d=(await sb.q('viewers','order=id.asc')).map(mv);LC.set('viewers',d);return d;},
-    async login(u,p){return(await DB.viewers.all()).find(v=>v.username===u&&v.passwordHash===hashPw(p))||null;},
-    async exists(u){return!!(await DB.viewers.all()).find(v=>v.username===u);},
-    async add(u,p,dn){const r=await sb.ins('viewers',{username:u,password_hash:hashPw(p),display_name:dn||u,created_at:now()});LC.del('viewers');return mv(r);},
-    async del(id){await sb.del('viewers',`id=eq.${id}`);LC.del('viewers');},
-  },
+
   admins:{
     async all(){try{return(await sb.q('admin_user','order=id.asc')).map(r=>({id:r.id,username:r.username,displayName:r.display_name,createdAt:r.created_at}));}catch{return[];}},
     async login(u,p){
@@ -316,6 +311,8 @@ const DB={
   expenses:{
     async all(){const c=LC.get('expenses');if(c)return c;const d=(await sb.q('expenses','order=id.asc')).map(me);LC.set('expenses',d);return d;},
     async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,location:e.location||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
+    async upd(id,d){await sb.upd('expenses',`id=eq.${id}`,d);LC.del('expenses');},
+    async del(id){await sb.del('expenses',`id=eq.${id}`);LC.del('expenses');},
   },
   archive:{
     async all(){try{const c=LC.get('archive');if(c)return c;const d=await sb.q('operations_archive','order=archived_date.desc');LC.set('archive',d);return d;}catch{return[];}},
@@ -720,8 +717,6 @@ function Login({onLogin}){
       if(role==="admin"){
         if(u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};}
         else{const a=await Promise.race([DB.admins.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!a){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...a,role:"admin"};}
-      }else if(role==="viewer"){
-        const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!v){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...v,role:"viewer"};
       }else{
         const tu=await Promise.race([DB.techUsers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!tu){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}const tech=await DB.techs.find(tu.techId);user={...tu,role:"tech",techName:tech?.name||u.trim()};
       }
@@ -734,7 +729,7 @@ function Login({onLogin}){
     }
     setLoading(false);
   };
-  const roles=[["admin","🔑","Admin",C.blue],["tech","🛠","Tech",C.green],["viewer","👁","Viewer",C.purple]];
+  const roles=[["admin","🔑","Admin",C.blue],["tech","🛠","Tech",C.green]];
   return <div style={{minHeight:"100vh",background:`radial-gradient(ellipse at 50% 0%,${C.blueD}15,${C.bg} 70%)`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
     <div style={{width:"100%",maxWidth:360}}>
       <div style={{textAlign:"center",marginBottom:30}}>
@@ -771,6 +766,7 @@ function AdminDash({user}){
   const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
   const lowMap=new Map();allBals.filter(b=>b.balance>=0&&b.balance<=b.threshold).forEach(x=>lowMap.set(x.id,x));const low=[...lowMap.values()];
+  const lowStock=I.filter(it=>it.stock<=it.threshold);
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
   const top=Object.values(um).sort((a,b)=>b.total-a.total).slice(0,6);
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
@@ -791,6 +787,10 @@ function AdminDash({user}){
     {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}12,${C.red}08)`,border:`1px solid ${C.amber}40`,borderRadius:14,padding:"13px 15px",marginBottom:14,boxShadow:`0 0 20px ${C.amber}08`}}>
       <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}><span style={{fontSize:18}}>⚠️</span><div style={{color:C.amber,fontWeight:700,fontSize:14}}>{low.length} مواد تحت حد التنبيه</div></div>
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
+    </div>}
+    {lowStock.length>0&&<div style={{background:`linear-gradient(135deg,${C.red}12,${C.amber}08)`,border:`1px solid ${C.red}40`,borderRadius:14,padding:"13px 15px",marginBottom:14,boxShadow:`0 0 20px ${C.red}08`}}>
+      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}><span style={{fontSize:18}}>🚨</span><div style={{color:C.red,fontWeight:700,fontSize:14}}>{lowStock.length} مواد مخزون منخفض</div></div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{lowStock.map((a,i)=><Badge key={i} color={a.stock<=0?C.red:C.amber} small>{a.name}: {a.stock} {a.unit}</Badge>)}</div>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
       {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} className="stat-card" style={{padding:"15px 16px",borderTop:`2px solid ${c}60`}} glow={c}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:26,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:4}}>{l}</div></div><div style={{width:38,height:38,borderRadius:10,background:`${c}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{ic}</div></div></Card>)}
@@ -958,70 +958,67 @@ function BarcodeScanner({onResult,onClose}){
 
 function AdminItems({user,toast}){
   const gs=useGS(["items"]);
-  const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
+  const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
   const items=gs.items||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
+  const lowStock=items.filter(it=>it.stock<=it.threshold);
   const save=async()=>{
     if(!form.name.trim()){toast("أدخل الاسم","error");return;}setSaving(true);
-    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",category:form.category,threshold:parseInt(form.threshold)||3,image:form.image};
+    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",category:form.category,threshold:parseInt(form.threshold)||3,stock:parseInt(form.stock)||0,image:form.image};
       if(editing){await DB.items.upd({...editing,...it});await DB.audit.add(user.displayName,"تعديل معدة",form.name);toast("✅ تم التحديث");}
       else{if(items.find(i=>i.name===it.name)){toast("المعدة موجودة","error");setSaving(false);return;}await DB.items.add(it);await DB.audit.add(user.displayName,"إضافة معدة",form.name);toast("✅ تمت الإضافة");}
-      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});}
+      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});}
     catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
   };
   const filtered=items.filter(it=>it.name.includes(search)||it.category?.includes(search));
   if(!gs.items)return <Skel/>;
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-      <div style={{fontWeight:800,fontSize:18}}>🔧 المعدات</div>
+      <div style={{fontWeight:800,fontSize:18}}>🔧 المعدات <Badge color={C.muted} small>{items.length}</Badge></div>
       <div style={{display:"flex",gap:5}}>
-        <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">طلب شراء</Btn>
-        <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
-        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
+        <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">شراء</Btn>
+        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
       </div>
     </div>
+    {lowStock.length>0&&<div style={{background:`${C.red}10`,border:`1px solid ${C.red}35`,borderRadius:14,padding:"12px 14px",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}><span style={{fontSize:16}}>🚨</span><div style={{color:C.red,fontWeight:700,fontSize:13}}>{lowStock.length} مواد وصلت حد التنبيه</div></div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{lowStock.map((a,i)=><Badge key={i} color={a.stock<=0?C.red:C.amber} small>{a.name}: {a.stock} {a.unit}</Badge>)}</div>
+    </div>}
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map(it=><Card key={it.id} style={{padding:0,overflow:"hidden"}}>
+      {filtered.map(it=>{const isLow=it.stock<=it.threshold;const stockCol=it.stock<=0?C.red:isLow?C.amber:C.green;return <Card key={it.id} style={{padding:0,overflow:"hidden",borderTop:isLow?`2px solid ${stockCol}`:undefined}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>{it.name}</div>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge><span style={{color:C.muted,fontSize:11}}>{it.unit}</span></div>
-          <div style={{color:C.muted,fontSize:11,marginBottom:7}}>تنبيه: {it.threshold}</div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,background:`${stockCol}12`,borderRadius:7,padding:"4px 8px"}}>
+            <span style={{fontSize:10,color:C.muted}}>المخزون</span>
+            <span style={{fontWeight:700,fontSize:14,color:stockCol}}>{it.stock} {it.unit}</span>
+          </div>
+          <div style={{color:C.muted,fontSize:10,marginBottom:5}}>⚠ تنبيه عند: {it.threshold}</div>
           <div style={{display:"flex",gap:4}}>
-            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
+            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,category:it.category||"شبكة",threshold:String(it.threshold),stock:String(it.stock||0),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
             <Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${it.name}؟`)){await DB.items.del(it.id);await DB.audit.add(user.displayName,"حذف معدة",it.name);await GS.reload("items");toast("🗑 تم");}}} style={{flex:1,padding:"4px 6px"}}>🗑</Btn>
           </div>
         </div>
-      </Card>)}
+      </Card>;})}
     </div>
-    <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 قائمة طلبات الشراء">
-      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو اقتربت من حد التنبيه</div>
-      {items.filter(it=>{
-        const bal=it._bal||0;
-        return bal<=it.threshold;
-      }).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
-      {items.map((it,i)=>{
-        const display=it.name+" (تنبيه: "+it.threshold+" "+it.unit+")";
-        return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-          <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>الحد: {it.threshold} {it.unit}</div></div>
-          <Badge color={C.amber} small>يحتاج مراجعة</Badge>
-        </div>;
-      })}
-      <Btn onClick={()=>{
-        let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";
-        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}\n`;});
-        msg+="\n📅 "+today();
-        window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");
-      }} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
+    <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 طلبات الشراء">
+      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو تحت حد التنبيه</div>
+      {lowStock.length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
+      {lowStock.map((it,i)=>{const col=it.stock<=0?C.red:C.amber;return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+        <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>متوفر: <span style={{color:col,fontWeight:700}}>{it.stock}</span> / حد: {it.threshold} {it.unit}</div></div>
+        <Badge color={col} small>{it.stock<=0?"نفذ":"قارب"}</Badge>
+      </div>;})}
+      <Btn onClick={()=>{let msg="🛒 *طلبات الشراء — Space Link*\n\n";lowStock.forEach(it=>{msg+=`• ${it.name} — متوفر: ${it.stock} / حد: ${it.threshold} ${it.unit}\n`;});msg+="\n📅 "+today();window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال واتساب</Btn>
     </Modal>
     <Modal open={modal==="scan"} onClose={()=>setModal(null)} title="📷 Barcode Scanner">
       <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
     </Modal>
     <Modal open={modal==="form"} onClose={()=>setModal(null)} title={editing?"✏️ تعديل معدة":"➕ إضافة معدة"}>
       <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة"/><Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/></div>
-      <Sel label="الصنف" value={form.category} onChange={v=>setForm({...form,category:v})} options={cats.map(c=>({value:c,label:c}))}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة"/><Sel label="الصنف" value={form.category} onChange={v=>setForm({...form,category:v})} options={cats.map(c=>({value:c,label:c}))}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="العدد المتوفر (المخزون)" type="number" value={form.stock} onChange={v=>setForm({...form,stock:v})} placeholder="0"/><Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/></div>
       <ImgPick label="(اختياري) صورة" value={form.image} onChange={v=>setForm({...form,image:v})}/>
       <Btn onClick={save} color={C.green} full loading={saving} style={{marginTop:6}}>{editing?"تحديث ✓":"إضافة ✓"}</Btn>
     </Modal>
@@ -1145,9 +1142,9 @@ function AdminReceipt({user,toast}){
 }
 
 // ── Admin History ─────────────────────────────────────
-function SubscriberHistory({expenses,techs,items}){
+function SubscriberHistory({expenses,techs,items,toast,onRefresh}){
   const [search,setSearch]=useState("");const [selected,setSelected]=useState(null);
-  // Get unique subscribers
+  const [editModal,setEditModal]=useState(null);const [editForm,setEditForm]=useState({qty:1,notes:"",subName:"",subUser:""});const [saving,setSaving]=useState(false);
   const subs=[...new Map(expenses.filter(e=>e.subscriberName).map(e=>[e.subscriberName,{name:e.subscriberName,user:e.subscriberUser||"",visits:0,lastVisit:"",totalItems:0}])).values()];
   subs.forEach(s=>{
     const visits=expenses.filter(e=>e.subscriberName===s.name);
@@ -1159,22 +1156,68 @@ function SubscriberHistory({expenses,techs,items}){
   subs.sort((a,b)=>b.visits-a.visits);
   const filtered=search?subs.filter(s=>s.name.includes(search)||(s.user&&s.user.includes(search))):subs;
 
+  const doDelete=async(exp)=>{
+    const item=items.find(i=>i.id===exp.itemId);const tech=techs.find(t=>t.id===exp.techId);
+    if(!confirm(`حذف صرفية ${exp.quantity} ${item?.unit||""} ${item?.name||""} للمشترك ${exp.subscriberName}؟`))return;
+    await DB.expenses.del(exp.id);
+    await DB.audit.add("admin","حذف صرفية",`${exp.quantity} ${item?.name||""} - ${exp.subscriberName}`);
+    await GS.reload("expenses");if(onRefresh)onRefresh();if(toast)toast("🗑 تم حذف الصرفية");
+  };
+  const doEdit=async()=>{
+    if(!editForm.subName.trim()){if(toast)toast("أدخل اسم المشترك","error");return;}
+    setSaving(true);
+    const updates={quantity:+editForm.qty,subscriber_name:editForm.subName.trim(),subscriber_user:editForm.subUser.trim()||null,notes:editForm.notes||null};
+    await DB.expenses.upd(editModal.id,updates);
+    await DB.audit.add("admin","تعديل صرفية",`${editModal.subscriberName} → ${editForm.subName}`);
+    await GS.reload("expenses");if(onRefresh)onRefresh();
+    setSaving(false);setEditModal(null);
+    if(toast)toast("✅ تم تعديل الصرفية");
+  };
+
   if(selected){
     const visits=expenses.filter(e=>e.subscriberName===selected.name);
-    const groups=groupExpenses(visits.map(e=>({...e,type:"صرفية",techName:techs.find(t=>t.id===e.techId)?.name||"—",itemName:items.find(i=>i.id===e.itemId)?.name||"—",unit:items.find(i=>i.id===e.itemId)?.unit||""})));
     return <div>
       <button onClick={()=>setSelected(null)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:8,padding:"5px 13px",fontSize:12,cursor:"pointer",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>← رجوع</button>
-      <div style={{background:C.bg3,borderRadius:12,padding:"13px 15px",marginBottom:13}}>
-        <div style={{fontWeight:800,fontSize:16,marginBottom:3}}>👤 {selected.name}</div>
-        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:5}}>@{selected.user}</div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
-          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg4,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:ic?17:14}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+      <div style={{background:C.bg3,borderRadius:14,padding:"15px 16px",marginBottom:14}}>
+        <div style={{fontWeight:800,fontSize:17,marginBottom:3}}>👤 {selected.name}</div>
+        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:6}}>@{selected.user}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:`${c}12`,borderRadius:10,padding:"8px",textAlign:"center",border:`1px solid ${c}20`}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
         </div>
         <div style={{color:C.muted,fontSize:11,marginTop:7}}>آخر زيارة: {selected.lastVisit}</div>
         <div style={{color:C.muted,fontSize:11}}>الفنيين: {selected.techs.join(" · ")}</div>
       </div>
-      <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:8}}>سجل الزيارات ({groups.length})</div>
-      {groups.map((g,i)=><GroupedRow key={i} group={g} allItems={items}/>)}
+      <div style={{fontWeight:700,fontSize:13,color:C.muted,marginBottom:9}}>سجل الصرفيات ({visits.length})</div>
+      {visits.sort((a,b)=>b.createdAt>a.createdAt?1:-1).map((exp,i)=>{
+        const item=items.find(x=>x.id===exp.itemId);const tech=techs.find(t=>t.id===exp.techId);
+        return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}><Badge color={C.amber} small>صرفية</Badge><span style={{fontWeight:700,fontSize:13}}>{tech?.name||"—"}</span></div>
+              <div style={{fontSize:13}}>{item?.name||"—"} — <span style={{color:C.amber,fontWeight:700}}>{exp.quantity} {item?.unit||""}</span></div>
+              {exp.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {exp.notes}</div>}
+              <div style={{color:C.muted,fontSize:12,marginTop:4}}>🕐 {exp.createdAt}</div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
+              <button onClick={()=>{setEditModal(exp);setEditForm({qty:exp.quantity,notes:exp.notes||"",subName:exp.subscriberName||"",subUser:exp.subscriberUser||""});}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>✏️ تعديل</button>
+              <button onClick={()=>doDelete(exp)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>🗑 حذف</button>
+            </div>
+          </div>
+        </div>;
+      })}
+      <Modal open={!!editModal} onClose={()=>setEditModal(null)} title="✏️ تعديل صرفية">
+        {editModal&&<>
+          <div style={{background:C.bg3,borderRadius:9,padding:"10px 13px",marginBottom:13}}>
+            <div style={{color:C.muted,fontSize:12}}>المادة: <strong style={{color:C.text}}>{items.find(i=>i.id===editModal.itemId)?.name||"—"}</strong></div>
+            <div style={{color:C.muted,fontSize:12}}>الفني: <strong style={{color:C.text}}>{techs.find(t=>t.id===editModal.techId)?.name||"—"}</strong></div>
+          </div>
+          <Inp label="اسم المشترك *" value={editForm.subName} onChange={v=>setEditForm({...editForm,subName:v})} placeholder="العميل"/>
+          <Inp label="يوزر المشترك" value={editForm.subUser} onChange={v=>setEditForm({...editForm,subUser:v})} placeholder="@username"/>
+          <div style={{marginBottom:13}}><div style={{color:C.muted,fontSize:11,marginBottom:5}}>الكمية</div><QtyPick value={+editForm.qty} onChange={v=>setEditForm({...editForm,qty:v})}/></div>
+          <Inp label="ملاحظة" value={editForm.notes} onChange={v=>setEditForm({...editForm,notes:v})} placeholder="اختياري..."/>
+          <Btn onClick={doEdit} color={C.blue} full loading={saving}>حفظ التعديل ✓</Btn>
+        </>}
+      </Modal>
     </div>;
   }
 
@@ -1182,7 +1225,7 @@ function SubscriberHistory({expenses,techs,items}){
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث باسم المشترك أو اليوزر..."/>
     <div style={{color:C.muted,fontSize:11,marginBottom:9}}>{subs.length} مشترك · {filtered.length} ظاهر</div>
     {filtered.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد نتائج</div>
-    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:11,padding:"11px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"border-color .15s"}}
+    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:12,padding:"12px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"all .2s"}}
       onMouseEnter={e=>e.currentTarget.style.borderColor=C.blue}
       onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -1200,7 +1243,7 @@ function SubscriberHistory({expenses,techs,items}){
   </div>;
 }
 
-function AdminHistory(){
+function AdminHistory({toast}){
   const [filter,setFilter]=useState("today");
   const [tab,setTab]=useState("live");
   const [dateFilter,setDateFilter]=useState(today());
@@ -1259,7 +1302,7 @@ function AdminHistory(){
       {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
     </>}
 
-    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I}/>}
+    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I} toast={toast} onRefresh={()=>GS.reload("expenses")}/>}
 
     {tab==="archive"&&<>
       {archive.length===0
@@ -1413,37 +1456,7 @@ function AdminAudit(){
   </div>;
 }
 
-function AdminViewers({user,toast}){
-  const [viewers,setViewers]=useState(null);const [modal,setModal]=useState(false);const [form,setForm]=useState({username:"",password:"",displayName:""});const [saving,setSaving]=useState(false);
-  const load=()=>DB.viewers.all().then(setViewers);useEffect(()=>{load();},[]);
-  const add=async()=>{
-    if(!form.username.trim()||!form.password.trim()){toast("أكمل الحقول","error");return;}
-    if(await DB.viewers.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}setSaving(true);
-    try{await DB.viewers.add(form.username.trim(),form.password.trim(),form.displayName.trim());await DB.audit.add(user.displayName,"إضافة viewer",form.username);load();setModal(false);setForm({username:"",password:"",displayName:""});toast("✅ تم إنشاء الحساب");}
-    catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
-  };
-  if(!viewers)return <Skel/>;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-      <div style={{fontWeight:800,fontSize:18}}>👁 المشاهدين</div>
-      <Btn onClick={()=>setModal(true)} color={C.purple} size="sm" icon="+">إضافة</Btn>
-    </div>
-    <div style={{background:`${C.purple}15`,border:`1px solid ${C.purple}40`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.purple}}>صلاحية المشاهد: عرض فقط بدون تعديل</div>
-    {viewers.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد مشاهدين</div>
-    :viewers.map(v=><Card key={v.id} style={{padding:"11px 15px",marginBottom:8}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div><div style={{fontWeight:700}}>{v.displayName||v.username}</div><div style={{color:C.muted,fontSize:12}}>@{v.username}</div></div>
-        <div style={{display:"flex",gap:5}}><Badge color={C.purple} small>👁 viewer</Badge><Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${v.username}؟`)){await DB.viewers.del(v.id);await DB.audit.add(user.displayName,"حذف viewer",v.username);load();toast("🗑 تم");}}}>🗑</Btn></div>
-      </div>
-    </Card>)}
-    <Modal open={modal} onClose={()=>setModal(false)} title="➕ إضافة مشاهد">
-      <Inp label="الاسم (اختياري)" value={form.displayName} onChange={v=>setForm({...form,displayName:v})} placeholder="الاسم الكامل"/>
-      <Inp label="اسم المستخدم *" value={form.username} onChange={v=>setForm({...form,username:v})} placeholder="viewer1"/>
-      <Inp label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
-      <Btn onClick={add} color={C.purple} full loading={saving} style={{marginTop:4}}>إنشاء الحساب ✓</Btn>
-    </Modal>
-  </div>;
-}
+
 
 // ── Admin Admins ──────────────────────────────────────
 function AdminAdmins({user,toast}){
@@ -1745,17 +1758,16 @@ function App(){
     return()=>document.removeEventListener('wheel',h);
   });
 
-  const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"viewers",icon:"👁",label:"Viewers"},{id:"admins",icon:"🔑",label:"Admins"}];
+  const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"admins",icon:"🔑",label:"Admins"}];
   const techTabs=[{id:"dash",icon:"📦",label:"رصيدي"},{id:"expense",icon:"📤",label:"صرفية"},{id:"history",icon:"📋",label:"سجلي"},{id:"profile",icon:"👤",label:"ملفي"}];
 
   if(!user)return <><style>{css}</style><Login onLogin={doLogin}/></>;
-  if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={doLogout}/></>;
 
   const isAdmin=user.role==="admin";const tabs=isAdmin?adminTabs:techTabs;const color=isAdmin?C.blue:C.green;
 
   const renderPage=()=>{
     if(isAdmin)switch(page){
-      case"dash":return<AdminDash user={user}/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"viewers":return<AdminViewers user={user} toast={showToast}/>;case"admins":return<AdminAdmins user={user} toast={showToast}/>;default:return<AdminDash user={user}/>;
+      case"dash":return<AdminDash user={user}/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory toast={showToast}/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"admins":return<AdminAdmins user={user} toast={showToast}/>;default:return<AdminDash user={user}/>;
     }
     switch(page){case"dash":return<TechDash user={user}/>;case"expense":return<TechExpense user={user} toast={showToast}/>;case"history":return<TechHistory user={user}/>;case"profile":return<TechProfile user={user} onLogout={doLogout} toast={showToast}/>;default:return<TechDash user={user}/>;}
   };
