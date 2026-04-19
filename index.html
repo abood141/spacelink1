@@ -1763,7 +1763,7 @@ function App(){
   </>;
 }
 
-const _root=ReactDOM.createRoot(document.getElementById('root'));_root.render(<App/>);
+// App is exported via new Function('React','ReactDOM', compiled + '\nreturn App;') in boot()
 
 
 </script>
