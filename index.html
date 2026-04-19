@@ -953,10 +953,15 @@ function BarcodeScanner({onResult,onClose}){
 }
 
 function AdminItems({user,toast}){
-  const gs=useGS(["items"]);
+  const gs=useGS(["items","receipts","expenses"]);
   const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
-  const items=gs.items||[];
+  const items=gs.items||[];const receipts=gs.receipts||[];const expenses=gs.expenses||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
+  const getStock=it=>{
+    const rec=receipts.filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
+    const sp=expenses.filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
+    return rec-sp;
+  };
   const save=async()=>{
     if(!form.name.trim()){toast("أدخل الاسم","error");return;}setSaving(true);
     try{const it={name:form.name.trim(),unit:form.unit||"قطعة",category:form.category,threshold:parseInt(form.threshold)||3,image:form.image};
@@ -978,38 +983,33 @@ function AdminItems({user,toast}){
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map(it=><Card key={it.id} style={{padding:0,overflow:"hidden"}}>
+      {filtered.map(it=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;return <Card key={it.id} style={{padding:0,overflow:"hidden"}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>{it.name}</div>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge><span style={{color:C.muted,fontSize:11}}>{it.unit}</span></div>
-          <div style={{color:C.muted,fontSize:11,marginBottom:7}}>تنبيه: {it.threshold}</div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge><span style={{color:C.muted,fontSize:11}}>{it.unit}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+            <span style={{color:C.muted,fontSize:10}}>حد التنبيه: {it.threshold}</span>
+            <span style={{color:col,fontWeight:700,fontSize:12}}>{stock>=0?stock:"—"}</span>
+          </div>
+          <div style={{height:3,background:C.bg4,borderRadius:2,marginBottom:7,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${Math.max(0,Math.min(100,stock<=0?0:(stock/(stock+it.threshold))*100))}%`,background:col,borderRadius:2,transition:"width .4s"}}/>
+          </div>
           <div style={{display:"flex",gap:4}}>
             <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
             <Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${it.name}؟`)){await DB.items.del(it.id);await DB.audit.add(user.displayName,"حذف معدة",it.name);await GS.reload("items");toast("🗑 تم");}}} style={{flex:1,padding:"4px 6px"}}>🗑</Btn>
           </div>
         </div>
-      </Card>)}
+      </Card>;})}
     </div>
     <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 قائمة طلبات الشراء">
       <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو اقتربت من حد التنبيه</div>
-      {items.filter(it=>{
-        const bal=it._bal||0;
-        return bal<=it.threshold;
-      }).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
-      {items.map((it,i)=>{
-        const display=it.name+" (تنبيه: "+it.threshold+" "+it.unit+")";
-        return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-          <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>الحد: {it.threshold} {it.unit}</div></div>
-          <Badge color={C.amber} small>يحتاج مراجعة</Badge>
-        </div>;
-      })}
-      <Btn onClick={()=>{
-        let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";
-        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}\n`;});
-        msg+="\n📅 "+today();
-        window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");
-      }} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
+      {items.filter(it=>getStock(it)<=it.threshold).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
+      {items.filter(it=>getStock(it)<=it.threshold).map((it,i)=>{const s=getStock(it);return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+        <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>متوفر: {s} · الحد: {it.threshold} {it.unit}</div></div>
+        <Badge color={s<=0?C.red:C.amber} small>{s<=0?"نفذ":"قارب النفاذ"}</Badge>
+      </div>;})}
+      <Btn onClick={()=>{let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";items.filter(it=>getStock(it)<=it.threshold).forEach(it=>{msg+=`• ${it.name} (${it.unit}) — متوفر: ${getStock(it)} / حد: ${it.threshold}\n`;});msg+="\n📅 "+today();window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
     </Modal>
     <Modal open={modal==="scan"} onClose={()=>setModal(null)} title="📷 Barcode Scanner">
       <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
@@ -1028,12 +1028,13 @@ function AdminItems({user,toast}){
 function ReceiptByDay({hist,techs,items,toast,onRefresh}){
   const [selDate,setSelDate]=useState(today);
   const [editing,setEditing]=useState(null);
-  const [editQty,setEditQty]=useState(1);
+  const [ef,setEf]=useState({qty:1,notes:"",tid:"",iid:""});
   const [saving,setSaving]=useState(false);
   const getD=r=>(r.createdAt||"").slice(0,10).replace(/[\/]/g,"-");
   const dates=[...new Set(hist.map(getD).filter(Boolean))].sort((a,b)=>b>a?1:-1);
   const recs=hist.filter(r=>getD(r)===selDate);
   const go=dir=>{const idx=dates.indexOf(selDate);const n=dates[idx+dir];if(n)setSelDate(n);};
+  const openEdit=r=>{ setEditing(r); setEf({qty:r.quantity,notes:r.notes||"",tid:String(r.techId),iid:String(r.itemId)}); };
   const doDelete=async r=>{
     const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
     if(!confirm(`حذف تسليم ${r.quantity} ${item?.unit||""} للفني ${tech?.name||""}؟`))return;
@@ -1044,16 +1045,18 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
     if(toast)toast("🗑 تم الحذف");
   };
   const doEdit=async()=>{
-    if(!editQty||+editQty<1){if(toast)toast("كمية غير صحيحة","error");return;}
+    if(!ef.qty||+ef.qty<1){if(toast)toast("كمية غير صحيحة","error");return;}
     setSaving(true);
-    const item=items.find(x=>x.id===editing.itemId);
-    const tech=techs.find(t=>t.id===editing.techId);
-    await DB.receipts.updQty(editing.id,+editQty);
-    await DB.audit.add("admin","تعديل تسليم",`${editing.quantity}→${editQty} ${item?.unit||""} للفني ${tech?.name||""}`);
-    await GS.reload("receipts","expenses");
-    if(onRefresh)onRefresh();
+    try{
+      await sb.upd("receipts",`id=eq.${editing.id}`,{tech_id:+ef.tid,item_id:+ef.iid,quantity:+ef.qty,notes:ef.notes||null});
+      LC.del("receipts");
+      const item=items.find(x=>x.id===+ef.iid);const tech=techs.find(t=>t.id===+ef.tid);
+      await DB.audit.add("admin","تعديل تسليم",`${editing.quantity}=>${ef.qty} ${item?.unit||""} للفني ${tech?.name||""}`);
+      await GS.reload("receipts","expenses");
+      if(onRefresh)onRefresh();
+      if(toast)toast("✅ تم التعديل");
+    }catch(e){if(toast)toast("خطأ: "+e.message,"error");}
     setSaving(false);setEditing(null);
-    if(toast)toast("✅ تم التعديل");
   };
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,background:C.bg3,borderRadius:11,padding:"9px 13px"}}>
@@ -1069,32 +1072,36 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
       ?<div style={{color:C.muted,textAlign:"center",padding:28,fontSize:13}}>لا توجد تسليمات في هذا اليوم</div>
       :[...recs].reverse().map((r,i)=>{
         const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
-        return <div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:7}}>
+        return <div key={i} style={{background:C.bg3,borderRadius:11,padding:"11px 13px",marginBottom:7,border:`1px solid ${C.border}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
             <div style={{flex:1}}>
-              <span style={{color:C.green,fontWeight:700}}>✅ {tech?.name||"—"}</span>
-              <span style={{color:C.muted,fontSize:12}}> — {item?.name||"—"}</span>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                <Dot c={C.green}/>
+                <span style={{color:C.green,fontWeight:700,fontSize:13}}>{tech?.name||"—"}</span>
+                <Badge color={C.blue} small>{item?.name||"—"}</Badge>
+              </div>
               {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
-              <div style={{color:C.muted,fontSize:13,marginTop:4,fontWeight:500}}>🕐 {r.createdAt}</div>
+              <div style={{color:C.muted,fontSize:11,marginTop:4}}>🕐 {r.createdAt}</div>
             </div>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
               <span style={{color:C.green,fontWeight:700,fontSize:15}}>{r.quantity} {item?.unit}</span>
               <div style={{display:"flex",gap:4}}>
-                <button onClick={()=>{setEditing(r);setEditQty(r.quantity);}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer"}}>✏️ تعديل</button>
-                <button onClick={()=>doDelete(r)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer"}}>🗑 حذف</button>
+                <button onClick={()=>openEdit(r)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>✏️ تعديل</button>
+                <button onClick={()=>doDelete(r)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>🗑</button>
               </div>
             </div>
           </div>
         </div>;
       })}
-    <Modal open={!!editing} onClose={()=>setEditing(null)} title="✏️ تعديل كمية التسليم">
+    <Modal open={!!editing} onClose={()=>setEditing(null)} title="✏️ تعديل التسليم">
       {editing&&<>
-        <div style={{background:C.bg3,borderRadius:9,padding:"10px 13px",marginBottom:13}}>
-          <div style={{color:C.muted,fontSize:12,marginBottom:3}}>الفني: <strong style={{color:C.text}}>{techs.find(t=>t.id===editing.techId)?.name||"—"}</strong></div>
-          <div style={{color:C.muted,fontSize:12,marginBottom:3}}>المادة: <strong style={{color:C.text}}>{items.find(i=>i.id===editing.itemId)?.name||"—"}</strong></div>
-          <div style={{color:C.muted,fontSize:12}}>الكمية الحالية: <strong style={{color:C.green}}>{editing.quantity} {items.find(i=>i.id===editing.itemId)?.unit||""}</strong></div>
+        <Sel label="الفني" value={ef.tid} onChange={v=>setEf({...ef,tid:v})} options={techs.map(t=>({value:String(t.id),label:t.name}))}/>
+        <Sel label="المادة" value={ef.iid} onChange={v=>setEf({...ef,iid:v})} options={items.map(i=>({value:String(i.id),label:`${i.name} (${i.unit})`}))}/>
+        <div style={{marginBottom:13}}>
+          <div style={{color:C.muted,fontSize:11,marginBottom:6}}>الكمية</div>
+          <QtyPick value={+ef.qty} onChange={v=>setEf({...ef,qty:v})}/>
         </div>
-        <div style={{marginBottom:13}}><div style={{color:C.muted,fontSize:11,marginBottom:6}}>الكمية الجديدة</div><QtyPick value={+editQty} onChange={v=>setEditQty(v)}/></div>
+        <Inp label="ملاحظة" value={ef.notes} onChange={v=>setEf({...ef,notes:v})} placeholder="اختياري..."/>
         <Btn onClick={doEdit} color={C.blue} full loading={saving}>حفظ التعديل ✓</Btn>
       </>}
     </Modal>
@@ -1103,23 +1110,30 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
 
 // ── Admin Receipt ─────────────────────────────────────
 function AdminReceipt({user,toast}){
-  const gs=useGS(["techs","items","receipts"]);
-  const [tid,setTid]=useState("");const [iid,setIid]=useState("");const [qty,setQty]=useState(1);const [notes,setNotes]=useState("");const [ok,setOk]=useState("");const [saving,setSaving]=useState(false);const [curBal,setCurBal]=useState(null);
+  const gs=useGS(["techs","items","receipts","expenses"]);
+  const [tid,setTid]=useState("");const [notes,setNotes]=useState("");const [ok,setOk]=useState("");const [saving,setSaving]=useState(false);
+  const [rlines,setRlines]=useState([{iid:"",qty:1}]);
   const techs=gs.techs||[];const items=gs.items||[];
   const hist=gs.receipts||null;
-  useEffect(()=>{
-    if(tid&&iid){
-      const R=gs.receipts||[];const E=gs.expenses||[];
-      const rec=R.filter(r=>r.techId===+tid&&r.itemId===+iid).reduce((s,r)=>s+r.quantity,0);
-      const sp=E.filter(e=>e.techId===+tid&&e.itemId===+iid).reduce((s,e)=>s+e.quantity,0);
-      setCurBal(rec-sp);
-    }else setCurBal(null);
-  },[tid,iid,gs.receipts,gs.expenses]);
+  const getBal=(iid)=>{if(!iid||!tid)return null;const R=gs.receipts||[];const E=gs.expenses||[];return R.filter(r=>r.techId===+tid&&r.itemId===+iid).reduce((s,r)=>s+r.quantity,0)-E.filter(e=>e.techId===+tid&&e.itemId===+iid).reduce((s,e)=>s+e.quantity,0);};
+  const addLine=()=>setRlines(l=>[...l,{iid:"",qty:1}]);
+  const remLine=i=>setRlines(l=>l.filter((_,j)=>j!==i));
+  const updLine=(i,k,v)=>setRlines(l=>l.map((x,j)=>j===i?{...x,[k]:v}:x));
   if(!hist)return <Skel/>;
   const submit=async()=>{
-    if(!tid||!iid){toast("اختر الفني والمادة","error");return;}setSaving(true);
-    try{const t=techs.find(x=>x.id===+tid);const it=items.find(x=>x.id===+iid);const r=await DB.receipts.add(+tid,+iid,qty,notes,user.id);await DB.audit.add(user.displayName,"تسليم مادة",`${qty} ${it.unit} → ${t.name}`);await GS.reload("receipts","expenses");setOk(`✅ تم تسليم ${qty} ${it.unit} للفني ${t.name} — ${r.createdAt}`);setQty(1);setNotes("");toast("✅ تم تسجيل التسليم");}
-    catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
+    if(!tid){toast("اختر الفني","error");return;}
+    const valid=rlines.filter(l=>l.iid&&l.qty>0);
+    if(!valid.length){toast("أضف مادة واحدة على الأقل","error");return;}
+    setSaving(true);
+    try{
+      const t=techs.find(x=>x.id===+tid);
+      await Promise.all(valid.map(l=>{const it=items.find(x=>x.id===+l.iid);return DB.receipts.add(+tid,+l.iid,l.qty,notes,user.id).then(()=>DB.audit.add(user.displayName,"تسليم مادة",`${l.qty} ${it?.unit} - ${t?.name}`));}));
+      await GS.reload("receipts","expenses");
+      setOk(`تم تسليم ${valid.length} مادة للفني ${t?.name}`);
+      setRlines([{iid:"",qty:1}]);setNotes("");
+      toast("✅ تم تسجيل التسليم");
+    }catch(e){toast("خطأ: "+e.message,"error");}
+    setSaving(false);
   };
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
@@ -1128,12 +1142,28 @@ function AdminReceipt({user,toast}){
     </div>
     <Card style={{padding:15,marginBottom:13}}>
       <Sel label="الفني" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
-      <Sel label="المادة" value={iid} onChange={setIid} options={[{value:"",label:"اختر المادة"},...items.map(i=>({value:String(i.id),label:i.name}))]}/>
-      {curBal!==null&&<div style={{color:C.blue,fontSize:12,marginBottom:9}}>الرصيد الحالي: {curBal} {items.find(i=>i.id===+iid)?.unit}</div>}
-      <div style={{marginBottom:13}}><div style={{color:C.muted,fontSize:11,marginBottom:5}}>الكمية</div><QtyPick value={qty} onChange={setQty}/></div>
-      <Inp label="ملاحظة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
-      {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:9,padding:"8px 13px",color:C.green,fontSize:12,marginBottom:9}}>{ok}</div>}
-      <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم</Btn>
+      <div style={{color:C.muted,fontSize:11,marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontWeight:700}}>المواد المُسلَّمة</span>
+        <span style={{color:C.blue,fontSize:10}}>{rlines.filter(l=>l.iid).length} مادة محددة</span>
+      </div>
+      {rlines.map((ln,i)=>{const bal=getBal(ln.iid);const it=items.find(x=>x.id===+ln.iid);return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 12px",marginBottom:8,border:`1px solid ${ln.iid?C.blue+"40":C.border}`,transition:"border-color .2s"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+          <select value={ln.iid} onChange={e=>updLine(i,"iid",e.target.value)} style={{flex:1,background:C.bg4,border:`1px solid ${C.border}`,color:ln.iid?C.text:C.muted,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",appearance:"none",fontFamily:"inherit"}}>
+            <option value="">اختر المادة…</option>
+            {items.map(it2=><option key={it2.id} value={String(it2.id)}>{it2.name} ({it2.unit})</option>)}
+          </select>
+          {rlines.length>1&&<button onClick={()=>remLine(i)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:15,flexShrink:0}}>✕</button>}
+        </div>
+        {bal!==null&&<div style={{color:bal<0?C.red:C.blue,fontSize:11,marginBottom:7}}>الرصيد الحالي: <strong>{bal} {it?.unit}</strong>{bal<=0&&<Badge color={C.red} small>نفذ</Badge>}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{color:C.muted,fontSize:11,flexShrink:0}}>الكمية:</div>
+          <QtyPick value={ln.qty} onChange={v=>updLine(i,"qty",v)}/>
+        </div>
+      </div>;})}
+      <button onClick={addLine} style={{width:"100%",background:`${C.blue}12`,border:`2px dashed ${C.blue}35`,color:C.blue,borderRadius:11,padding:"10px",fontSize:13,cursor:"pointer",fontWeight:700,marginBottom:11,fontFamily:"inherit"}}>+ إضافة مادة أخرى</button>
+      <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
+      {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:9,padding:"9px 13px",color:C.green,fontSize:13,marginBottom:10,fontWeight:700}}>✅ {ok}</div>}
+      <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم ({rlines.filter(l=>l.iid).length} مادة)</Btn>
     </Card>
     <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>سجل التسليمات</div>
     <ReceiptByDay hist={hist} techs={techs} items={items} toast={toast} onRefresh={()=>{GS.reload("receipts","expenses");}}/>
