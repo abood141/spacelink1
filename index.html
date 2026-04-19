@@ -609,6 +609,29 @@ const Toast=({msg,type,visible})=>{
   const c=type==="error"?C.red:type==="warn"?C.amber:C.green;
   return <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:C.bg3,border:`1px solid ${c}`,color:c,padding:"9px 20px",borderRadius:12,zIndex:9000,fontWeight:700,fontSize:13,animation:"fadeUp .3s ease",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center"}}>{msg}</div>;
 };
+function ToastStack({toasts}){
+  return <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9000,display:"flex",flexDirection:"column",gap:7,alignItems:"center",pointerEvents:"none"}}>
+    {toasts.map(t=>{
+      const c=t.type==="error"?C.red:t.type==="warn"?C.amber:C.green;
+      return <div key={t.id} style={{background:C.bg3,border:`1px solid ${c}`,color:c,padding:"9px 20px",borderRadius:12,fontWeight:700,fontSize:13,animation:"fadeUp .3s ease",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center",pointerEvents:"auto",boxShadow:`0 4px 20px ${c}30`}}>{t.msg}</div>;
+    })}
+  </div>;
+}
+function RTDot(){
+  const [connected,setConnected]=useState(false);
+  useEffect(()=>{
+    if(!window.supabase)return;
+    try{
+      const c=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+      const ch=c.channel('rt-ping').subscribe(st=>{setConnected(st==='SUBSCRIBED');});
+      return()=>{try{c.removeChannel(ch);}catch{}};
+    }catch{}
+  },[]);
+  if(!connected)return null;
+  return <div title="Realtime متصل" style={{display:"inline-flex",alignItems:"center",gap:4,background:`${C.green}18`,border:`1px solid ${C.green}40`,borderRadius:20,padding:"2px 7px",fontSize:10,color:C.green,fontWeight:700}}>
+    <span style={{width:6,height:6,borderRadius:"50%",background:C.green,display:"inline-block",animation:"pulse 2s ease infinite"}}/>RT
+  </div>;
+}
 const Badge=({children,color=C.blue,small})=><span style={{background:`${color}22`,color,border:`1px solid ${color}40`,borderRadius:20,padding:small?"2px 8px":"4px 11px",fontSize:small?10:12,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
 const Div=()=><div style={{height:1,background:C.border,margin:"12px 0"}}/>;
 const Skel=()=><div style={{padding:"16px 14px"}}>{[90,70,100,70,90].map((w,i)=><div key={i} style={{height:i%2===0?56:40,background:`linear-gradient(90deg,${C.bg3} 25%,${C.bg4} 50%,${C.bg3} 75%)`,backgroundSize:"400px",borderRadius:10,marginBottom:10,width:w+"%",animation:"shimmer 1.3s ease infinite",animationDelay:i*.08+"s"}}/>)}</div>;
@@ -1086,7 +1109,7 @@ function AdminTechs({user,toast}){
       </div>
     </div>
     {techs.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد فنيين</div>
-    :techs.map((t,i)=><div key={t.id} className="animate-list-item" style={{animationDelay: `s`}}><TechItem key={t.id} tech={t} items={items} receipts={receipts} expenses={expenses} user={user} toast={toast} onEdit={setModal} onDelete={delTech}/></div>)}
+    :techs.map((t,i)=><div key={t.id} className="animate-list-item" style={{animationDelay:`${i*0.05}s`}}><TechItem key={t.id} tech={t} items={items} receipts={receipts} expenses={expenses} user={user} toast={toast} onEdit={setModal} onDelete={delTech}/></div>)}
     
     <Modal open={modal==="add"} onClose={()=>setModal(null)} title="➕ إضافة فني جديد">
       <Inp label="اسم الفني *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="الاسم"/>
@@ -1190,7 +1213,7 @@ function AdminItems({user,toast}){
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map((it,i)=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;const warn=stock<=it.threshold;return <Card key={it.id} className={`animate-list-item  style={{padding:0,overflow:"hidden",animationDelay:`s`}}>
+      {filtered.map((it,i)=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;const warn=stock<=it.threshold;return <Card key={it.id} className="animate-list-item" style={{padding:0,overflow:"hidden",animationDelay:`${i*0.05}s`}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
@@ -1716,50 +1739,40 @@ function AdminApp({user,toast:showToast,doLogout}){
 
 // ── App Boot ──────────────────────────────────────────
 function App(){
-  const [user,setUser]=useState(null);
+  const [user,setUser]=useState(()=>{
+    try{const s=localStorage.getItem('sl_session');return s?JSON.parse(s):null;}catch{return null;}
+  });
   const [toasts,setToasts]=useState([]);
   const showToast=(msg,type="success")=>{
     const id=Date.now();
     setToasts(t=>[...t,{id,msg,type}]);
     setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000);
   };
-  
+
+  // Initialize Realtime on mount
   useEffect(()=>{
-    sb.auth.getUser().then(({data})=>{if(data?.user){
-      sb.db.from('admins').select('*').eq('id',data.user.id).single().then(({data:adminData})=>{
-        if(adminData) setUser({id:data.user.id, role:"admin", username:adminData.username, displayName:adminData.display_name});
-      });
-    }});
-    const {data:{subscription}}=sb.auth.onAuthStateChange((evt,session)=>{
-      if(!session) setUser(null);
-    });
-    return ()=>subscription?.unsubscribe();
+    RT.init();
+    RT.subscribe();
+    return()=>RT.unsubscribe();
   },[]);
-  
-  const doLogin=async(u,p)=>{
-    const {data,error}=await sb.db.from('admins').select('*').eq('username',u).single();
-    if(error||!data) return "اسم المستخدم غير صحيح";
-    if(data.password!==p) return "كلمة المرور غير صحيحة";
-    const {data:authData,error:authErr}=await sb.auth.signInWithPassword({email:u+"@spacelink.local",password:p});
-    if(authErr) return "خطأ في تسجيل الدخول: "+authErr.message;
-    setUser({id:authData.user.id, role:"admin", username:data.username, displayName:data.display_name});
-    return null;
+
+  const doLogin=(u)=>{
+    setUser(u);
   };
-  
-  const doLogout=async()=>{
-    await sb.auth.signOut();
+
+  const doLogout=()=>{
+    localStorage.removeItem('sl_session');
     setUser(null);
   };
 
-  if(!user) return <><style>{css}</style><ToastStack toasts={toasts}/><Login onLogin={doLogin}/></>;
-
+  if(!user) return (<><style>{css}</style><ToastStack toasts={toasts}/><Login onLogin={doLogin}/></>);
   return <>
     <ToastStack toasts={toasts}/>
     <AdminApp user={user} toast={showToast} doLogout={doLogout}/>
   </>;
 }
 
-ReactDOM.render(<App/>, document.getElementById('root'));
+const _root=ReactDOM.createRoot(document.getElementById('root'));_root.render(<App/>);
 
 
 </script>
