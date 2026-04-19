@@ -205,7 +205,9 @@ async function sbFetch(url,opts,tries=4){
         new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),timeout))
       ]);
       if(!r.ok)throw new Error(await r.text());
-      return r.json();
+      if(r.status===204)return null;
+      const text=await r.text();
+      return text?JSON.parse(text):null;
     }catch(e){
       if(i===tries-1)throw e;
       // Wait 2s, 3s, 4s between retries
@@ -671,7 +673,7 @@ function GroupedRow({group,allItems}){
     <div style={{color:C.muted,fontSize:13,marginTop:4,fontWeight:500}}>🕐 {first.createdAt}</div>
   </div>;
 }
-function BalRow({b,allItems}){
+function BalRow({b,allItems,onEditItem}){
   const pct=b.received>0?(b.balance/b.received)*100:0;const col=b.balance<=0?C.red:b.balance<=b.threshold?C.amber:C.green;
   const img=allItems?.find(i=>i.id===b.id)?.image;
   return <div style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
@@ -680,7 +682,10 @@ function BalRow({b,allItems}){
       <div style={{flex:1}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontWeight:700,fontSize:14}}>{b.name}</span>
-          <span style={{fontWeight:700,color:col}}>{b.balance} {b.unit}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontWeight:700,color:col}}>{b.balance} {b.unit}</span>
+            {onEditItem&&<button onClick={()=>onEditItem(b)} style={{background:`${C.blue}15`,border:"none",color:C.blue,borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",fontWeight:700}}>تعديل ✏️</button>}
+          </div>
         </div>
         <div style={{display:"flex",gap:10,fontSize:11,color:C.muted,marginTop:2,flexWrap:"wrap"}}>
           <span style={{color:C.blue}}>↓ {b.received}</span><span style={{color:C.amber}}>↑ {b.spent}</span>
@@ -940,6 +945,47 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
     </div>
   </Card>;
 }
+function EditTechItem({tech,item,onClose,toast,user}){
+  const [type,setType]=useState("add");
+  const [qty,setQty]=useState("");
+  const [notes,setNotes]=useState("تعديل يدوي");
+  const [saving,setSaving]=useState(false);
+
+  const save=async()=>{
+    if(!qty||+qty<=0){toast("كمية غير صحيحة","error");return;}
+    setSaving(true);
+    try{
+      if(type==="add"){
+        await DB.receipts.add(tech.id, item.id, +qty, notes, user.id);
+      }else{
+        await DB.expenses.add({techId:tech.id, itemId:item.id, quantity:+qty, notes});
+      }
+      await DB.audit.add(user.displayName,"تعديل رصيد",`${type==="add"?"إضافة":"سحب"} ${qty} ${item.unit} للفني ${tech.name}`);
+      await GS.reload("receipts","expenses");
+      toast("✅ تم تعديل الرصيد");
+      onClose();
+    }catch(e){toast("خطأ: "+e.message,"error");}
+    setSaving(false);
+  };
+
+  return <div>
+    <div style={{background:C.bg2,borderRadius:9,padding:10,marginBottom:12,border:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{fontWeight:700}}>{item.name}</div>
+      <Badge color={item.balance>0?C.green:C.red} small>حالي: {item.balance} {item.unit}</Badge>
+    </div>
+    
+    <div style={{display:"flex",gap:6,marginBottom:12}}>
+      <button onClick={()=>setType("add")} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${type==="add"?C.green:C.border}`,background:type==="add"?`${C.green}15`:C.bg3,color:type==="add"?C.green:C.muted,fontWeight:700,cursor:"pointer"}}>➕ إضافة (استلام)</button>
+      <button onClick={()=>setType("remove")} style={{flex:1,padding:"10px",borderRadius:9,border:`1px solid ${type==="remove"?C.red:C.border}`,background:type==="remove"?`${C.red}15`:C.bg3,color:type==="remove"?C.red:C.muted,fontWeight:700,cursor:"pointer"}}>➖ سحب (صرف)</button>
+    </div>
+
+    <Inp label="الكمية *" type="number" value={qty} onChange={setQty} placeholder="مثال: 5"/>
+    <Inp label="ملاحظات" value={notes} onChange={setNotes}/>
+    
+    <Btn onClick={save} color={type==="add"?C.green:C.red} full loading={saving} style={{marginTop:10}}>حفظ التعديل ✓</Btn>
+  </div>;
+}
+
 function AdminTechs({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [modal,setModal]=useState(null);const [form,setForm]=useState({name:"",phone:"",username:"",password:""});const [saving,setSaving]=useState(false);
@@ -953,14 +999,39 @@ function AdminTechs({user,toast}){
     setSaving(false);
   };
   const delTech=async t=>{if(!confirm(`حذف ${t.name}؟`))return;await DB.techs.del(t.id);await DB.audit.add(user.displayName,"حذف فني",t.name);await GS.reload("techs","expenses","receipts");toast("🗑 تم الحذف");};
+  
+  const resetAll=async()=>{
+    if(!confirm("⚠️ تحذير: هذا سيقوم بتصفير رصيد جميع الفنيين لكل المواد. هل أنت متأكد؟"))return;
+    setSaving(true);toast("⏳ جارٍ التصفير...");
+    try{
+      const ops=[];
+      techs.forEach(t=>{
+        const bals=calcBals(t.id,items,receipts,expenses);
+        bals.forEach(b=>{
+          if(b.balance>0) ops.push(DB.expenses.add({techId:t.id, itemId:b.id, quantity:b.balance, notes:"System Reset"}));
+          else if(b.balance<0) ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "System Reset", user.id));
+        });
+      });
+      await Promise.all(ops);
+      await DB.audit.add(user.displayName,"تصفير شامل","تم تصفير كل أرصدة الفنيين");
+      await GS.reload("receipts","expenses");
+      toast("✅ تم تصفير كافة الفنيين");
+    }catch(e){toast("خطأ: "+e.message,"error");}
+    setSaving(false);
+  };
+
   if(!gs.techs)return <Skel/>;
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
       <div style={{fontWeight:800,fontSize:18}}>👷 الفنيين</div>
-      <Btn onClick={()=>setModal("add")} color={C.green} size="sm" icon="+">إضافة فني</Btn>
+      <div style={{display:"flex",gap:6}}>
+        <Btn onClick={resetAll} color={C.amber} size="sm" icon="🔄" loading={saving}>تصفير الكل</Btn>
+        <Btn onClick={()=>setModal("add")} color={C.green} size="sm" icon="+">إضافة فني</Btn>
+      </div>
     </div>
     {techs.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد فنيين</div>
     :techs.map(t=><TechItem key={t.id} tech={t} items={items} receipts={receipts} expenses={expenses} user={user} toast={toast} onEdit={setModal} onDelete={delTech}/>)}
+    
     <Modal open={modal==="add"} onClose={()=>setModal(null)} title="➕ إضافة فني جديد">
       <Inp label="اسم الفني *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="الاسم"/>
       <Inp label="رقم الهاتف" value={form.phone} onChange={v=>setForm({...form,phone:v})} placeholder="07701234567"/>
@@ -969,9 +1040,15 @@ function AdminTechs({user,toast}){
       <Inp label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
       <Btn onClick={add} color={C.green} full loading={saving} style={{marginTop:6}}>حفظ وإنشاء الحساب ✓</Btn>
     </Modal>
+    
     <Modal open={modal?.type==="bal"} onClose={()=>setModal(null)} title={`📦 رصيد — ${modal?.tech?.name}`}>
-      {modal?.bals?.length===0?<div style={{color:C.muted,textAlign:"center",padding:20}}>لا يوجد رصيد</div>:modal?.bals?.map((b,i)=><BalRow key={i} b={b} allItems={modal.items}/>)}
+      {modal?.bals?.length===0?<div style={{color:C.muted,textAlign:"center",padding:20}}>لا يوجد رصيد</div>:modal?.bals?.map((b,i)=><BalRow key={i} b={b} allItems={modal.items} onEditItem={(item)=>setModal({type:"editItem",tech:modal.tech,item})}/>)}
     </Modal>
+    
+    <Modal open={modal?.type==="editItem"} onClose={()=>setModal({type:"bal", tech:modal.tech, items:modal.items, bals:calcBals(modal.tech.id,items,receipts,expenses)})} title={`✏️ تعديل رصيد — ${modal?.tech?.name}`}>
+      {modal?.item&&<EditTechItem tech={modal.tech} item={modal.item} user={user} toast={toast} onClose={()=>setModal({type:"bal", tech:modal.tech, items:modal.items, bals:calcBals(modal.tech.id,items,receipts,expenses)})}/>}
+    </Modal>
+
     <Modal open={modal?.type==="pw"} onClose={()=>setModal(null)} title={`🔑 كلمة مرور — ${modal?.tech?.name}`}>
       {modal?.tu&&<ResetPw tu={modal.tu} onDone={async()=>{await DB.audit.add(user.displayName,"تغيير كلمة مرور",modal.tu.username);setModal(null);toast("✅ تم");}}/>}
     </Modal>
@@ -1112,11 +1189,15 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
   const doDelete=async r=>{
     const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
     if(!confirm(`حذف تسليم ${r.quantity} ${item?.unit||""} للفني ${tech?.name||""}؟`))return;
-    await DB.receipts.del(r.id);
-    await DB.audit.add("admin","حذف تسليم",`${r.quantity} ${item?.unit||""} من ${tech?.name||""}`);
-    await GS.reload("receipts","expenses");
-    if(onRefresh)onRefresh();
-    if(toast)toast("🗑 تم الحذف");
+    try {
+      await DB.receipts.del(r.id);
+      await DB.audit.add("admin","حذف تسليم",`${r.quantity} ${item?.unit||""} من ${tech?.name||""}`);
+      await GS.reload("receipts","expenses");
+      if(onRefresh)onRefresh();
+      if(toast)toast("🗑 تم الحذف");
+    } catch(e) {
+      if(toast)toast("خطأ: "+e.message,"error");
+    }
   };
   const doEdit=async()=>{
     if(!ef.qty||+ef.qty<1){if(toast)toast("كمية غير صحيحة","error");return;}
