@@ -618,19 +618,10 @@ function ToastStack({toasts}){
   </div>;
 }
 function RTDot(){
-  const [connected,setConnected]=useState(false);
-  useEffect(()=>{
-    if(!window.supabase)return;
-    try{
-      const c=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
-      const ch=c.channel('rt-ping').subscribe(st=>{setConnected(st==='SUBSCRIBED');});
-      return()=>{try{c.removeChannel(ch);}catch{}};
-    }catch{}
-  },[]);
-  if(!connected)return null;
-  return <div title="Realtime متصل" style={{display:"inline-flex",alignItems:"center",gap:4,background:`${C.green}18`,border:`1px solid ${C.green}40`,borderRadius:20,padding:"2px 7px",fontSize:10,color:C.green,fontWeight:700}}>
-    <span style={{width:6,height:6,borderRadius:"50%",background:C.green,display:"inline-block",animation:"pulse 2s ease infinite"}}/>RT
-  </div>;
+  const [act,setAct]=useState(false);
+  useEffect(()=>{const id=setInterval(()=>setAct(!!RT._active),2000);return()=>clearInterval(id);},[]);
+  if(!act)return null;
+  return <div style={{background:`${C.green}20`,border:`1px solid ${C.green}50`,borderRadius:7,padding:"2px 8px",fontSize:10,color:C.green,display:"flex",alignItems:"center",gap:4}}><Dot c={C.green} pulse/>مباشر</div>;
 }
 const Badge=({children,color=C.blue,small})=><span style={{background:`${color}22`,color,border:`1px solid ${color}40`,borderRadius:20,padding:small?"2px 8px":"4px 11px",fontSize:small?10:12,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
 const Div=()=><div style={{height:1,background:C.border,margin:"12px 0"}}/>;
