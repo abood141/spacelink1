@@ -50,6 +50,60 @@
       }
     }
 
+
+    @keyframes slideUpFade {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate-list-item {
+      animation: slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      opacity: 0;
+    }
+
+    .bnav {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 90%;
+      max-width: 400px;
+      background: rgba(13, 18, 32, 0.8);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      z-index: 5000;
+      padding: 5px;
+    }
+
+    @keyframes glowPulseError {
+      0% {
+        box-shadow: 0 0 0 0 rgba(247, 93, 93, 0.4);
+      }
+
+      70% {
+        box-shadow: 0 0 0 10px rgba(247, 93, 93, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(247, 93, 93, 0);
+      }
+    }
+
+    .warning-card {
+      animation: glowPulseError 2s infinite;
+      border-color: rgba(247, 93, 93, 0.5) !important;
+    }
+
     @media(min-width:1024px) {
       :root {
         --mw: 100%
@@ -264,11 +318,11 @@ const SQ={
 window.addEventListener('online',()=>{SQ.flush();});
 
 // ── DB Layer ─────────────────────────────────────────
-const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image}:null;
-const mt=r=>r?{id:r.id,name:r.name,phone:r.phone,createdAt:r.created_at}:null;
+const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image,is_active:r.is_active??true}:null;
+const mt=r=>r?{id:r.id,name:r.name,phone:r.phone,is_active:r.is_active??true,createdAt:r.created_at}:null;
 const mtu=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,techId:r.tech_id,createdAt:r.created_at}:null;
 const mv=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,displayName:r.display_name,createdAt:r.created_at}:null;
-const mr=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,notes:r.notes,adminId:r.admin_id,createdAt:r.created_at}:null;
+const mr=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,notes:r.notes,adminId:r.admin_id,type:r.type||'receipt',createdAt:r.created_at}:null;
 const me=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,subscriberName:r.subscriber_name,subscriberUser:r.subscriber_user,notes:r.notes,workImage:r.work_image,location:r.location,groupId:r.group_id,createdAt:r.created_at}:null;
 
 const DB={
@@ -277,13 +331,13 @@ const DB={
     async find(id){return(await DB.items.all()).find(i=>i.id===+id)||null;},
     async add(item){const r=await sb.ins('items',{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,created_at:now()});LC.del('items');return mi(r);},
     async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null});LC.del('items');},
-    async del(id){await sb.del('items',`id=eq.${id}`);LC.del('items');},
+    async del(id){await sb.upd('items',`id=eq.${id}`,{is_active:false});LC.del('items');},
   },
   techs:{
     async all(){const c=LC.get('techs');if(c)return c;const d=(await sb.q('technicians','order=id.asc')).map(mt);LC.set('techs',d);return d;},
     async find(id){return(await DB.techs.all()).find(t=>t.id===+id)||null;},
     async add(name,phone){const r=await sb.ins('technicians',{name,phone:phone||null,created_at:now()});LC.del('techs');return mt(r);},
-    async del(id){await sb.del('technicians',`id=eq.${id}`);LC.del('techs');LC.del('techUsers');LC.del('expenses');},
+    async del(id){await sb.upd('technicians',`id=eq.${id}`,{is_active:false});LC.del('techs');LC.del('techUsers');LC.del('expenses');},
   },
   techUsers:{
     async all(){const c=LC.get('techUsers');if(c)return c;const d=(await sb.q('tech_users','order=id.asc')).map(mtu);LC.set('techUsers',d);return d;},
@@ -314,7 +368,7 @@ const DB={
   },
   receipts:{
     async all(){const c=LC.get('receipts');if(c)return c;const d=(await sb.q('receipts','order=id.asc')).map(mr);LC.set('receipts',d);return d;},
-    async add(tid,iid,qty,notes,aid){const r=await sb.ins('receipts',{tech_id:tid,item_id:iid,quantity:qty,notes:notes||null,admin_id:aid||null,created_at:now()});LC.del('receipts');return mr(r);},
+    async add(tid,iid,qty,notes,aid,type='receipt'){const r=await sb.ins('receipts',{tech_id:tid,item_id:iid,quantity:qty,notes:notes||null,admin_id:aid||null,type,created_at:now()});LC.del('receipts');return mr(r);},
     async upd(id,qty,notes){await sb.upd('receipts',`id=eq.${id}`,{quantity:qty,notes:notes||null});LC.del('receipts');},
     async updQty(id,qty){await sb.upd('receipts',`id=eq.${id}`,{quantity:qty});LC.del('receipts');},
     async del(id){await sb.del('receipts',`id=eq.${id}`);LC.del('receipts');},
@@ -429,9 +483,10 @@ function useGS(keys){
 // ── Helpers ───────────────────────────────────────────
 function calcBals(techId,items,receipts,expenses){
   return items.map(item=>{
-    const rec=(receipts||[]).filter(r=>r.techId===+techId&&r.itemId===item.id).reduce((s,r)=>s+r.quantity,0);
+    const rec=(receipts||[]).filter(r=>r.techId===+techId&&r.itemId===item.id&&r.type!=='return').reduce((s,r)=>s+r.quantity,0);
+    const ret=(receipts||[]).filter(r=>r.techId===+techId&&r.itemId===item.id&&r.type==='return').reduce((s,r)=>s+r.quantity,0);
     const sp=(expenses||[]).filter(e=>e.techId===+techId&&e.itemId===item.id).reduce((s,e)=>s+e.quantity,0);
-    return rec>0||sp>0?{...item,received:rec,spent:sp,balance:rec-sp}:null;
+    return rec>0||sp>0||ret>0?{...item,received:rec,spent:sp,returned:ret,balance:rec-(sp+ret)}:null;
   }).filter(Boolean);
 }
 function groupExpenses(expenses){
@@ -676,7 +731,8 @@ function GroupedRow({group,allItems}){
 function BalRow({b,allItems,onEditItem}){
   const pct=b.received>0?(b.balance/b.received)*100:0;const col=b.balance<=0?C.red:b.balance<=b.threshold?C.amber:C.green;
   const img=allItems?.find(i=>i.id===b.id)?.image;
-  return <div style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
+  const warn=b.balance<=b.threshold;
+  return <div className={warn?"warning-card":""} style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
     <div style={{display:"flex",gap:9,alignItems:"flex-start",marginBottom:7}}>
       {img&&<img src={img} style={{width:38,height:38,borderRadius:7,objectFit:"cover",flexShrink:0}} alt=""/>}
       <div style={{flex:1}}>
@@ -815,7 +871,7 @@ function Login({onLogin}){
 function AdminDash({user}){
   const gs=useGS(["items","techs","receipts","expenses"]);
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
-  const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
+  const T=(gs.techs||[]).filter(t=>t.is_active!==false),I=(gs.items||[]).filter(i=>i.is_active!==false),R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
   const lowMap=new Map();allBals.filter(b=>b.balance>=0&&b.balance<=b.threshold).forEach(x=>lowMap.set(x.id,x));const low=[...lowMap.values()];
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
@@ -989,7 +1045,7 @@ function EditTechItem({tech,item,onClose,toast,user}){
 function AdminTechs({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [modal,setModal]=useState(null);const [form,setForm]=useState({name:"",phone:"",username:"",password:""});const [saving,setSaving]=useState(false);
-  const techs=gs.techs||[];const items=gs.items||[];const receipts=gs.receipts||[];const expenses=gs.expenses||[];
+  const techs=(gs.techs||[]).filter(t=>t.is_active!==false);const items=(gs.items||[]).filter(i=>i.is_active!==false);const receipts=gs.receipts||[];const expenses=gs.expenses||[];
   const add=async()=>{
     if(!form.name.trim()||!form.username.trim()||!form.password.trim()){toast("أكمل الحقول *","error");return;}
     if(await DB.techUsers.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}
@@ -1030,7 +1086,7 @@ function AdminTechs({user,toast}){
       </div>
     </div>
     {techs.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد فنيين</div>
-    :techs.map(t=><TechItem key={t.id} tech={t} items={items} receipts={receipts} expenses={expenses} user={user} toast={toast} onEdit={setModal} onDelete={delTech}/>)}
+    :techs.map((t,i)=><div key={t.id} className="animate-list-item" style={{animationDelay: `s`}}><TechItem key={t.id} tech={t} items={items} receipts={receipts} expenses={expenses} user={user} toast={toast} onEdit={setModal} onDelete={delTech}/></div>)}
     
     <Modal open={modal==="add"} onClose={()=>setModal(null)} title="➕ إضافة فني جديد">
       <Inp label="اسم الفني *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="الاسم"/>
@@ -1106,7 +1162,7 @@ function BarcodeScanner({onResult,onClose}){
 function AdminItems({user,toast}){
   const gs=useGS(["items","receipts","expenses"]);
   const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
-  const items=gs.items||[];const receipts=gs.receipts||[];const expenses=gs.expenses||[];
+  const items=(gs.items||[]).filter(i=>i.is_active!==false);const receipts=gs.receipts||[];const expenses=gs.expenses||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
   const getStock=it=>{
     const rec=receipts.filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
@@ -1134,7 +1190,7 @@ function AdminItems({user,toast}){
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map(it=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;return <Card key={it.id} style={{padding:0,overflow:"hidden"}}>
+      {filtered.map((it,i)=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;const warn=stock<=it.threshold;return <Card key={it.id} className={`animate-list-item  style={{padding:0,overflow:"hidden",animationDelay:`s`}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
@@ -1227,19 +1283,22 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
       ?<div style={{color:C.muted,textAlign:"center",padding:28,fontSize:13}}>لا توجد تسليمات في هذا اليوم</div>
       :[...recs].reverse().map((r,i)=>{
         const tech=techs.find(t=>t.id===r.techId);const item=items.find(x=>x.id===r.itemId);
+        const isRet=r.type==='return';
+        const col=isRet?C.amber:C.green;
         return <div key={i} style={{background:C.bg3,borderRadius:11,padding:"11px 13px",marginBottom:7,border:`1px solid ${C.border}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
             <div style={{flex:1}}>
               <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
-                <Dot c={C.green}/>
-                <span style={{color:C.green,fontWeight:700,fontSize:13}}>{tech?.name||"—"}</span>
+                <Dot c={col}/>
+                <span style={{color:col,fontWeight:700,fontSize:13}}>{tech?.name||"—"}</span>
                 <Badge color={C.blue} small>{item?.name||"—"}</Badge>
+                {isRet&&<Badge color={C.amber} small>↩️ استرجاع</Badge>}
               </div>
               {r.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {r.notes}</div>}
               <div style={{color:C.muted,fontSize:11,marginTop:4}}>🕐 {r.createdAt}</div>
             </div>
             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
-              <span style={{color:C.green,fontWeight:700,fontSize:15}}>{r.quantity} {item?.unit}</span>
+              <span style={{color:col,fontWeight:700,fontSize:15}}>{r.quantity} {item?.unit}</span>
               <div style={{display:"flex",gap:4}}>
                 <button onClick={()=>openEdit(r)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>✏️ تعديل</button>
                 <button onClick={()=>doDelete(r)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>🗑</button>
@@ -1266,40 +1325,85 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
 // ── Admin Receipt ─────────────────────────────────────
 function AdminReceipt({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
+  const [tab,setTab]=useState("receipt"); // "receipt" | "return"
   const [tid,setTid]=useState("");const [notes,setNotes]=useState("");const [ok,setOk]=useState("");const [saving,setSaving]=useState(false);
   const [rlines,setRlines]=useState([{iid:"",qty:1}]);
-  const techs=gs.techs||[];const items=gs.items||[];
+  
+  const techs=(gs.techs||[]).filter(t=>t.is_active!==false);
+  const items=(gs.items||[]).filter(i=>i.is_active!==false);
   const hist=gs.receipts||null;
-  const getBal=(iid)=>{if(!iid||!tid)return null;const R=gs.receipts||[];const E=gs.expenses||[];return R.filter(r=>r.techId===+tid&&r.itemId===+iid).reduce((s,r)=>s+r.quantity,0)-E.filter(e=>e.techId===+tid&&e.itemId===+iid).reduce((s,e)=>s+e.quantity,0);};
+  
+  const getBal=(iid)=>{
+    if(!iid||!tid)return null;
+    const R=gs.receipts||[];const E=gs.expenses||[];
+    const rec=R.filter(r=>r.techId===+tid&&r.itemId===+iid&&r.type!=='return').reduce((s,r)=>s+r.quantity,0);
+    const ret=R.filter(r=>r.techId===+tid&&r.itemId===+iid&&r.type==='return').reduce((s,r)=>s+r.quantity,0);
+    const sp=E.filter(e=>e.techId===+tid&&e.itemId===+iid).reduce((s,e)=>s+e.quantity,0);
+    return rec-(sp+ret);
+  };
+  
   const addLine=()=>setRlines(l=>[...l,{iid:"",qty:1}]);
   const remLine=i=>setRlines(l=>l.filter((_,j)=>j!==i));
   const updLine=(i,k,v)=>setRlines(l=>l.map((x,j)=>j===i?{...x,[k]:v}:x));
+  
+  // Clean rlines when switching tab
+  useEffect(()=>{setRlines([{iid:"",qty:1}]);setNotes(tab==="return"?"استرجاع للمخزن":"");setOk("");},[tab]);
+
   if(!hist)return <Skel/>;
+  
   const submit=async()=>{
     if(!tid){toast("اختر الفني","error");return;}
     const valid=rlines.filter(l=>l.iid&&l.qty>0);
     if(!valid.length){toast("أضف مادة واحدة على الأقل","error");return;}
+    
+    // Validation for returns
+    if(tab==="return"){
+      for(let l of valid){
+        const bal=getBal(l.iid);
+        if(bal===null || l.qty>bal){
+          const it=items.find(x=>x.id===+l.iid);
+          toast(`الكمية المسترجعة لـ ${it?.name} أكبر من الرصيد الحالي (${bal})`,"error");
+          return;
+        }
+      }
+    }
+
     setSaving(true);
     try{
       const t=techs.find(x=>x.id===+tid);
-      await Promise.all(valid.map(l=>{const it=items.find(x=>x.id===+l.iid);return DB.receipts.add(+tid,+l.iid,l.qty,notes,user.id).then(()=>DB.audit.add(user.displayName,"تسليم مادة",`${l.qty} ${it?.unit} - ${t?.name}`));}));
+      const actionName=tab==="receipt"?"تسليم مادة":"استرجاع عهدة";
+      await Promise.all(valid.map(l=>{
+        const it=items.find(x=>x.id===+l.iid);
+        return DB.receipts.add(+tid,+l.iid,l.qty,notes,user.id,tab).then(()=>DB.audit.add(user.displayName,actionName,`${l.qty} ${it?.unit} ${tab==="receipt"?"-":"من"} ${t?.name}`));
+      }));
       await GS.reload("receipts","expenses");
-      setOk(`تم تسليم ${valid.length} مادة للفني ${t?.name}`);
-      setRlines([{iid:"",qty:1}]);setNotes("");
-      toast("✅ تم تسجيل التسليم");
+      setOk(`تم ${tab==="receipt"?"تسليم":"استرجاع"} ${valid.length} مادة ${tab==="receipt"?"للفني":"من الفني"} ${t?.name}`);
+      setRlines([{iid:"",qty:1}]);
+      if(tab!=="return")setNotes("");
+      toast(`✅ تم تسجيل ${tab==="receipt"?"التسليم":"الاسترجاع"}`);
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
   };
+  
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-      <div style={{fontWeight:800,fontSize:18}}>📦 تسليم معدات</div>
+      <div style={{fontWeight:800,fontSize:18}}>📦 إدارة العهدة</div>
       <div style={{background:C.bg3,border:`1px solid ${C.border}`,borderRadius:8,padding:"3px 9px",fontSize:10,color:C.muted}}>🕛 يتصفر 12 ليل بغداد</div>
     </div>
-    <Card style={{padding:15,marginBottom:13}}>
+    
+    <div style={{display:"flex",gap:4,marginBottom:14,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
+      <button onClick={()=>setTab("receipt")} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="receipt"?`${C.green}20`:"transparent",color:tab==="receipt"?C.green:C.muted,fontWeight:tab==="receipt"?700:400,fontSize:13}}>📤 تسليم معدات</button>
+      <button onClick={()=>setTab("return")} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="return"?`${C.amber}20`:"transparent",color:tab==="return"?C.amber:C.muted,fontWeight:tab==="return"?700:400,fontSize:13}}>↩️ استرجاع عهدة</button>
+    </div>
+
+    <Card style={{padding:15,marginBottom:13,border:tab==="return"?`1px solid ${C.amber}50`:"none"}}>
+      <div style={{color:tab==="return"?C.amber:C.green,fontWeight:700,fontSize:14,marginBottom:12}}>
+        {tab==="receipt"?"تسليم مواد جديدة للفني":"استرجاع مواد من الفني للمخزن"}
+      </div>
       <Sel label="الفني" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
       <div style={{color:C.muted,fontSize:11,marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span style={{fontWeight:700}}>المواد المُسلَّمة</span>
-        <span style={{color:C.blue,fontSize:10}}>{rlines.filter(l=>l.iid).length} مادة محددة</span>
+        <span style={{fontWeight:700}}>المواد المحددة</span>
+        <span style={{color:C.blue,fontSize:10}}>{rlines.filter(l=>l.iid).length} مادة</span>
       </div>
       {rlines.map((ln,i)=>{const bal=getBal(ln.iid);const it=items.find(x=>x.id===+ln.iid);return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 12px",marginBottom:8,border:`1px solid ${ln.iid?C.blue+"40":C.border}`,transition:"border-color .2s"}}>
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
@@ -1318,69 +1422,15 @@ function AdminReceipt({user,toast}){
       <button onClick={addLine} style={{width:"100%",background:`${C.blue}12`,border:`2px dashed ${C.blue}35`,color:C.blue,borderRadius:11,padding:"10px",fontSize:13,cursor:"pointer",fontWeight:700,marginBottom:11,fontFamily:"inherit"}}>+ إضافة مادة أخرى</button>
       <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
       {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:9,padding:"9px 13px",color:C.green,fontSize:13,marginBottom:10,fontWeight:700}}>✅ {ok}</div>}
-      <Btn onClick={submit} color={C.green} full size="lg" loading={saving}>📦 تسجيل التسليم ({rlines.filter(l=>l.iid).length} مادة)</Btn>
+      <Btn onClick={submit} color={tab==="return"?C.amber:C.green} full size="lg" loading={saving}>{tab==="receipt"?"📦 تسجيل التسليم":"↩️ تأكيد الاسترجاع"} ({rlines.filter(l=>l.iid).length} مادة)</Btn>
     </Card>
-    <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>سجل التسليمات</div>
+    <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>سجل العمليات</div>
     <ReceiptByDay hist={hist} techs={techs} items={items} toast={toast} onRefresh={()=>{GS.reload("receipts","expenses");}}/>
   </div>;
 }
 
 // ── Admin History ─────────────────────────────────────
-function SubscriberHistory({expenses,techs,items}){
-  const [search,setSearch]=useState("");const [selected,setSelected]=useState(null);
-  // Get unique subscribers
-  const subs=[...new Map(expenses.filter(e=>e.subscriberName).map(e=>[e.subscriberName,{name:e.subscriberName,user:e.subscriberUser||"",visits:0,lastVisit:"",totalItems:0}])).values()];
-  subs.forEach(s=>{
-    const visits=expenses.filter(e=>e.subscriberName===s.name);
-    s.visits=[...new Set(visits.map(e=>e.groupId||e.createdAt))].length;
-    s.lastVisit=visits.reduce((m,e)=>e.createdAt>m?e.createdAt:m,"");
-    s.totalItems=visits.reduce((n,e)=>n+e.quantity,0);
-    s.techs=[...new Set(visits.map(e=>techs.find(t=>t.id===e.techId)?.name).filter(Boolean))];
-  });
-  subs.sort((a,b)=>b.visits-a.visits);
-  const filtered=search?subs.filter(s=>s.name.includes(search)||(s.user&&s.user.includes(search))):subs;
-
-  if(selected){
-    const visits=expenses.filter(e=>e.subscriberName===selected.name);
-    const groups=groupExpenses(visits.map(e=>({...e,type:"صرفية",techName:techs.find(t=>t.id===e.techId)?.name||"—",itemName:items.find(i=>i.id===e.itemId)?.name||"—",unit:items.find(i=>i.id===e.itemId)?.unit||""})));
-    return <div>
-      <button onClick={()=>setSelected(null)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:8,padding:"5px 13px",fontSize:12,cursor:"pointer",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>← رجوع</button>
-      <div style={{background:C.bg3,borderRadius:12,padding:"13px 15px",marginBottom:13}}>
-        <div style={{fontWeight:800,fontSize:16,marginBottom:3}}>👤 {selected.name}</div>
-        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:5}}>@{selected.user}</div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
-          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg4,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:ic?17:14}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
-        </div>
-        <div style={{color:C.muted,fontSize:11,marginTop:7}}>آخر زيارة: {selected.lastVisit}</div>
-        <div style={{color:C.muted,fontSize:11}}>الفنيين: {selected.techs.join(" · ")}</div>
-      </div>
-      <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:8}}>سجل الزيارات ({groups.length})</div>
-      {groups.map((g,i)=><GroupedRow key={i} group={g} allItems={items}/>)}
-    </div>;
-  }
-
-  return <div>
-    <Inp value={search} onChange={setSearch} placeholder="🔍 بحث باسم المشترك أو اليوزر..."/>
-    <div style={{color:C.muted,fontSize:11,marginBottom:9}}>{subs.length} مشترك · {filtered.length} ظاهر</div>
-    {filtered.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد نتائج</div>
-    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:11,padding:"11px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"border-color .15s"}}
-      onMouseEnter={e=>e.currentTarget.style.borderColor=C.blue}
-      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-        <div>
-          <div style={{fontWeight:700,fontSize:14}}>{s.name}</div>
-          {s.user&&<div style={{color:C.cyan,fontSize:12}}>@{s.user}</div>}
-          <div style={{color:C.muted,fontSize:11,marginTop:2}}>🔧 {s.visits} زيارة · آخر: {s.lastVisit?.slice(0,10)}</div>
-        </div>
-        <div style={{textAlign:"right"}}>
-          <Badge color={C.blue} small>{s.totalItems} وحدة</Badge>
-          <div style={{color:C.muted,fontSize:10,marginTop:3}}>👷 {s.techs.slice(0,2).join("، ")}</div>
-        </div>
-      </div>
-    </div>)}
-  </div>;
-}
-
+// ── Admin History ─────────────────────────────────────
 function AdminHistory(){
   const [filter,setFilter]=useState("today");
   const [tab,setTab]=useState("live");
@@ -1413,9 +1463,9 @@ function AdminHistory(){
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📋 سجل العمليات</div>
 
-    {/* Tabs: Live / Subscribers / Archive */}
+    {/* Tabs: Live / Archive */}
     <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
-      {[["live","📋 الحي"],["subs","👥 المشتركين"],["archive","🗃 الأرشيف"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
+      {[["live","📋 الحي"],["archive","🗃 الأرشيف"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
     </div>
 
     {tab==="live"&&<>
@@ -1440,8 +1490,6 @@ function AdminHistory(){
       {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
     </>}
 
-    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I}/>}
-
     {tab==="archive"&&<>
       {archive.length===0
         ?<div style={{color:C.muted,textAlign:"center",padding:50}}>
@@ -1457,436 +1505,136 @@ function AdminHistory(){
               <div style={{flex:1,height:1,background:C.border}}/>
             </div>
             <div style={{fontSize:11,color:C.muted,marginBottom:8,display:"flex",gap:10}}>
-              <span style={{color:C.green}}>✅ {day.receipts?.length||0} تسليم</span>
-              <span style={{color:C.amber}}>📤 {day.expGroups?.length||0} صرفية</span>
+              <span>تسليمات: {day.receipts}</span> | <span>صرفيات: {day.expenses}</span>
             </div>
-            {(day.receipts||[]).map((op,i)=><OpsRow key={"r"+i} op={op}/>)}
-            {(day.expGroups||[]).map((g,i)=><GroupedRow key={"e"+i} group={g} allItems={I}/>)}
-            {(!day.receipts?.length&&!day.expGroups?.length)&&<div style={{color:C.muted,fontSize:12,textAlign:"center",padding:16}}>لا توجد بيانات</div>}
           </div>)}
     </>}
   </div>;
 }
 
-// ── AI Predictions ────────────────────────────────────
-function AIPredictions({items,expenses,receipts}){
-  const predictions=useMemo(()=>{
-    const days14=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-13+i);return d.toISOString().slice(0,10);});
-    return items.map(it=>{
-      const daily=days14.map(d=>expenses.filter(e=>e.itemId===it.id&&(e.createdAt?.startsWith(d)||e.createdAt?.includes(d.replace(/-/g,"/")))).reduce((s,e)=>s+e.quantity,0));
-      const avg=daily.reduce((s,v)=>s+v,0)/14;
-      const rec=receipts.filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
-      const sp=expenses.filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
-      const stock=rec-sp;
-      const daysLeft=avg>0?Math.floor(stock/avg):null;
-      const r7=daily.slice(7).reduce((s,v)=>s+v,0);
-      const p7=daily.slice(0,7).reduce((s,v)=>s+v,0);
-      const trendPct=p7===0?(r7>0?100:0):Math.round(((r7-p7)/p7)*100);
-      const suggestBuy=avg>0?Math.max(0,Math.ceil(avg*30-stock)):0;
-      return{...it,stock,avg:avg.toFixed(2),daysLeft,trendPct,suggestBuy};
-    }).filter(it=>+it.avg>0).sort((a,b)=>(a.daysLeft??9999)-(b.daysLeft??9999));
-  },[items,expenses,receipts]);
-
-  if(!predictions.length)return <div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد بيانات كافية للتنبؤ</div>;
-  return <div>
-    <div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}30`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.blue}}>
-      🤖 التنبؤات مبنية على متوسط الاستهلاك اليومي خلال آخر 14 يوم
-    </div>
-    {predictions.map((it,i)=>{
-      const urgency=it.daysLeft!==null&&it.daysLeft<=3?C.red:it.daysLeft!==null&&it.daysLeft<=10?C.amber:C.green;
-      const trendCol=it.trendPct>10?C.red:it.trendPct>0?C.amber:C.green;
-      return <Card key={i} style={{marginBottom:9,padding:"13px 15px",border:`1px solid ${urgency}30`}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-          <div style={{fontWeight:700,fontSize:14}}>{it.name}</div>
-          <div style={{display:"flex",gap:5,flexWrap:"wrap",justifyContent:"flex-end"}}>
-            {it.daysLeft!==null&&<Badge color={urgency} small>{it.daysLeft<=0?"نفذ!":it.daysLeft+" يوم متبقي"}</Badge>}
-            {it.trendPct!==0&&<Badge color={trendCol} small>{it.trendPct>0?"↑":"↓"}{Math.abs(it.trendPct)}% اتجاه</Badge>}
-          </div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6,marginBottom:8}}>
-          {[["المخزون",`${it.stock} ${it.unit}`,urgency],["يومياً",`${it.avg} ${it.unit}`,C.muted],["الاتجاه",`${it.trendPct>0?"+":""}${it.trendPct}%`,trendCol],["شراء مقترح",`${it.suggestBuy} ${it.unit}`,C.purple]].map(([l,v,c])=>
-            <div key={l} style={{background:C.bg3,borderRadius:8,padding:"7px",textAlign:"center"}}>
-              <div style={{color:c,fontWeight:700,fontSize:12,wordBreak:"break-word"}}>{v}</div>
-              <div style={{color:C.muted,fontSize:10}}>{l}</div>
-            </div>
-          )}
-        </div>
-        {+it.suggestBuy>0&&<div style={{background:`${C.purple}12`,border:`1px solid ${C.purple}30`,borderRadius:8,padding:"6px 11px",fontSize:11,color:C.purple}}>
-          💡 يُنصح بشراء {it.suggestBuy} {it.unit} لتوفير احتياطي شهر
-        </div>}
-      </Card>;
-    })}
-  </div>;
-}
-
-function AdminReports({toast}){
-  const [tab,setTab]=useState("overview");
-  const gs=useGS(["techs","expenses","receipts","items"]);
-  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().slice(0,10);});
-  const [dateTo,setDateTo]=useState(today);
-  if(!gs.techs)return <Skel/>;
-  const {techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining}=buildReportData(gs);
-
-  const shareWhatsApp=()=>{
-    let msg=`📊 *تقرير Space Link*\n📅 ${dateFrom} → ${dateTo}\n\n👷 *ملخص الفنيين:*\n`;
-    techStats.forEach(t=>{msg+=`• ${t.name}: استلم ${t.received} | صرف ${t.spent} | متبقي ${t.remaining}\n`;});
-    msg+=`\n📊 المتبقي الإجمالي: ${totalRemaining} وحدة\n🔗 Space Link`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,'_blank');
+// ── Admin Expense (تسجيل صرفية) ─────────────────────
+function AdminExpense({user,toast}){
+  const gs=useGS(["techs","items","receipts","expenses"]);
+  const [tid,setTid]=useState("");
+  const [subName,setSubName]=useState("");
+  const [subUser,setSubUser]=useState("");
+  const [location,setLocation]=useState("");
+  const [notes,setNotes]=useState("");
+  const [ok,setOk]=useState("");
+  const [saving,setSaving]=useState(false);
+  const [rlines,setRlines]=useState([{iid:"",qty:1}]);
+  
+  const techs=(gs.techs||[]).filter(t=>t.is_active!==false);
+  const items=(gs.items||[]).filter(i=>i.is_active!==false);
+  
+  const getBal=(iid)=>{
+    if(!iid||!tid)return null;
+    const R=gs.receipts||[];const E=gs.expenses||[];
+    const rec=R.filter(r=>r.techId===+tid&&r.itemId===+iid&&r.type!=='return').reduce((s,r)=>s+r.quantity,0);
+    const ret=R.filter(r=>r.techId===+tid&&r.itemId===+iid&&r.type==='return').reduce((s,r)=>s+r.quantity,0);
+    const sp=E.filter(e=>e.techId===+tid&&e.itemId===+iid).reduce((s,e)=>s+e.quantity,0);
+    return rec-(sp+ret);
   };
-
-  const exportExcel=()=>{
-    const fd=arr=>arr.filter(r=>{const d=r.createdAt?.slice(0,10)||"";return d>=dateFrom&&d<=dateTo;});
-    let csv="\uFEFF";csv+=`تقرير Space Link\nالفترة: ${dateFrom} إلى ${dateTo}\n\n`;
-    csv+="=== ملخص الفنيين ===\nالفني,استلم,صرف,المتبقي,أنواع\n";
-    techStats.forEach(x=>{csv+=`${x.name},${x.received},${x.spent},${x.remaining},${x.items}\n`;});
-    csv+="\n=== التسليمات ===\nالوقت,الفني,المادة,الكمية,ملاحظة\n";
-    fd(receipts).forEach(r=>{const t=techs.find(x=>x.id===r.techId);const it=items.find(x=>x.id===r.itemId);csv+=`${r.createdAt},${t?.name||""},${it?.name||""},${r.quantity},${r.notes||""}\n`;});
-    csv+="\n=== الصرفيات ===\nالوقت,الفني,المادة,الكمية,المشترك,ملاحظة\n";
-    fd(expenses).forEach(e=>{const t=techs.find(x=>x.id===e.techId);const it=items.find(x=>x.id===e.itemId);csv+=`${e.createdAt},${t?.name||""},${it?.name||""},${e.quantity},${e.subscriberName||""},${e.notes||""}\n`;});
-    csv+="\n=== أكثر المواد ===\nالترتيب,المادة,الكمية,الوحدة\n";
-    topItems.forEach((x,i)=>{csv+=`${i+1},${x.name},${x.total},${x.unit}\n`;});
-    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`SpaceLink_${dateFrom}_${dateTo}.csv`;a.click();toast("✅ تم تصدير Excel");
-  };
-
-  const exportPDF=()=>{
-    const html=`<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>تقرير Space Link</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Tahoma,Arial,sans-serif;background:#fff;color:#111;padding:28px 32px;direction:rtl;font-size:13px}
-  .header{display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid #4F8EF7}
-  .logo{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#2563EB,#4F8EF7);display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;flex-shrink:0}
-  h1{font-size:20px;font-weight:800;color:#111}
-  .meta{color:#666;font-size:12px;margin-top:2px}
-  h2{font-size:14px;font-weight:700;color:#2563EB;margin:20px 0 8px;padding-bottom:4px;border-bottom:1px solid #E0E8FF}
-  table{width:100%;border-collapse:collapse;margin-bottom:16px}
-  th{background:#EEF4FF;color:#2563EB;padding:7px 10px;text-align:right;font-weight:700;font-size:12px;border:1px solid #D0DEFF}
-  td{padding:6px 10px;border:1px solid #E8EDF5;font-size:12px}
-  tr:nth-child(even) td{background:#F8FAFF}
-  .green{color:#059669;font-weight:700}.red{color:#DC2626;font-weight:700}.amber{color:#D97706;font-weight:700}
-  .summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
-  .stat-box{border:1px solid #E8EDF5;border-radius:10px;padding:12px;text-align:center}
-  .stat-val{font-size:22px;font-weight:800;margin-bottom:3px}
-  .stat-lbl{font-size:11px;color:#666}
-  .footer{margin-top:24px;padding-top:12px;border-top:1px solid #E0E8FF;font-size:11px;color:#999;display:flex;justify-content:space-between}
-  @media print{body{padding:16px}@page{size:A4;margin:1.5cm}}
-</style></head><body>
-<div class="header">
-  <div class="logo">🌐</div>
-  <div><h1>تقرير Space Link</h1><div class="meta">📅 الفترة: ${dateFrom} ← ${dateTo} &nbsp;·&nbsp; تاريخ الطباعة: ${today()}</div></div>
-</div>
-<div class="summary-grid">
-  ${[["👷",techs.length,"الفنيين","#4F8EF7"],["🔧",items.length,"المعدات","#A78BFA"],["📦",receipts.length,"تسليمات","#10D9A0"],["📊",totalRemaining,"المتبقي الإجمالي","#22D3EE"]].map(([ic,v,l,c])=>`<div class="stat-box"><div class="stat-val" style="color:${c}">${ic} ${v}</div><div class="stat-lbl">${l}</div></div>`).join("")}
-</div>
-<h2>👷 ملخص الفنيين</h2>
-<table><tr><th>#</th><th>الفني</th><th>استلم</th><th>صرف</th><th>المتبقي</th><th>أنواع</th></tr>
-${techStats.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${t.name}</strong></td><td class="green">${t.received}</td><td class="amber">${t.spent}</td><td class="${t.remaining>0?'green':'red'}">${t.remaining}</td><td>${t.items}</td></tr>`).join("")}
-</table>
-<h2>🔥 أكثر المواد استخداماً</h2>
-<table><tr><th>#</th><th>المادة</th><th>إجمالي الاستهلاك</th><th>الوحدة</th></tr>
-${topItems.slice(0,10).map((it,i)=>`<tr><td>${i+1}</td><td><strong>${it.name}</strong></td><td class="amber">${it.total}</td><td>${it.unit}</td></tr>`).join("")}
-</table>
-<div class="footer"><span>🔗 Space Link — نظام إدارة مكتب الإنترنت</span><span>صفحة 1</span></div>
-</body></html>`;
-    const w=window.open('','_blank');
-    if(!w){toast("يُرجى السماح بالنوافذ المنبثقة","warn");return;}
-    w.document.write(html);w.document.close();
-    setTimeout(()=>w.print(),400);
-    toast("✅ جاهز للطباعة");
-  };
-
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-      <div style={{fontWeight:800,fontSize:18}}>📊 التقارير</div>
-      <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
-        <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"4px 7px",fontSize:11,outline:"none",direction:"ltr"}}/>
-        <span style={{color:C.muted,fontSize:11}}>←</span>
-        <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"4px 7px",fontSize:11,outline:"none",direction:"ltr"}}/>
-        <Btn onClick={exportPDF} color={C.red} size="sm" icon="🖨">PDF</Btn>
-        <Btn onClick={exportExcel} color={C.green} size="sm" icon="📊">Excel</Btn>
-        <Btn onClick={shareWhatsApp} color={C.greenD} size="sm" icon="💬">واتساب</Btn>
-      </div>
-    </div>
-    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:14,border:`1px solid ${C.border}`,overflowX:"auto"}}>
-      {[["overview","نظرة عامة"],["techs","الفنيين"],["items","المواد"],["trend","الاتجاه"],["ai","🤖 توقعات"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12,whiteSpace:"nowrap",minWidth:60}}>{l}</button>)}
-    </div>
-    {tab==="overview"&&<div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
-        {[["👷",techs.length,C.blue,"الفنيين"],["🔧",items.length,C.purple,"المعدات"],["📦",receipts.length,C.green,"تسليمات"],["📤",expenses.length,C.amber,"صرفيات"],["📊",totalRemaining||0,C.cyan,"المتبقي"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 14px"}} glow={c}><div style={{fontSize:19}}>{ic}</div><div style={{fontSize:24,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:11}}>{l}</div></Card>)}
-      </div>
-      <Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>آخر 14 يوم</div><LineSVG data={lineData} dataKey="قيمة" color={C.amber} h={130}/></Card>
-    </div>}
-    {tab==="techs"&&(techStats.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا يوجد فنيين</div>
-    :<div>
-      <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 14px",marginBottom:12}}>
-        <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>🏆 ترتيب الفنيين (حسب الصرفيات)</div>
-        {[...techStats].sort((a,b)=>b.spent-a.spent).map((t,i)=>{
-          const medal=["🥇","🥈","🥉"][i]||`#${i+1}`;
-          const pts=t.spent*10+t.items*5;
-          return <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:i<techStats.length-1?`1px solid ${C.border}`:"none"}}>
-            <span style={{fontSize:18,width:28}}>{medal}</span>
-            <div style={{flex:1}}><div style={{fontWeight:700}}>{t.name}</div><div style={{color:C.muted,fontSize:11}}>صرف {t.spent} | أنواع {t.items}</div></div>
-            <div style={{textAlign:"right"}}><div style={{color:C.amber,fontWeight:700,fontSize:15}}>{pts} نقطة</div></div>
-          </div>;
-        })}
-      </div>
-      {techStats.map((t,i)=><Card key={i} style={{padding:"13px 15px",marginBottom:9}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
-          <div style={{fontWeight:700,fontSize:14}}>👷 {t.name}</div>
-          <div style={{display:"flex",gap:5}}>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}<Badge color={C.amber} small>⭐ {t.spent*10+t.items*5} نقطة</Badge></div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["متبقي",t.remaining,C.cyan],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:18,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
-      </Card>)}
-    </div>)}
-    {tab==="items"&&<>
-      <Card style={{padding:"14px 11px",marginBottom:12}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>📊 الأكثر استخداماً</div><BarSVG data={topItems.slice(0,6).map(x=>({day:x.name.slice(0,5),total:x.total}))} keys={["total"]} colors={[C.amber]} h={150}/></Card>
-      {topItems.map((it,i)=>{
-        const days7=[...Array(7)].map((_,j)=>{const d=new Date();d.setDate(d.getDate()-6+j);return d.toISOString().slice(0,10);});
-        const trend=days7.map(d=>({day:d.slice(8),قيمة:expenses.filter(e=>e.itemId===items.find(x=>x.name===it.name)?.id&&(e.createdAt?.startsWith(d)||e.createdAt?.includes(d.replace(/-/g,"/")))).reduce((s,e)=>s+e.quantity,0)}));
-        const hasTrend=trend.some(t=>t["قيمة"]>0);
-        return <Card key={i} style={{marginBottom:8,padding:"11px 13px"}}>
-          <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:hasTrend?9:0}}>
-            <div style={{fontSize:17,fontWeight:700,color:C.chart[i]||C.muted,width:28,textAlign:"center"}}>#{i+1}</div>
-            <div style={{flex:1,fontWeight:600}}>{it.name}</div>
-            <div style={{color:C.amber,fontWeight:700}}>{it.total} {it.unit}</div>
-          </div>
-          {hasTrend&&<LineSVG data={trend} dataKey="قيمة" color={C.chart[i]||C.amber} h={60}/>}
-        </Card>;
-      })}
-    </>}
-    {tab==="trend"&&<Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:10}}>الاستهلاك اليومي</div><LineSVG data={lineData} dataKey="قيمة" color={C.blue} h={200}/></Card>}
-    {tab==="ai"&&<AIPredictions items={items} expenses={expenses} receipts={receipts}/>}
-  </div>;
-}
-
-
-// ── Admin Audit ───────────────────────────────────────
-function AdminAudit(){
-  const [log,setLog]=useState(null);
-  const [tab,setTab]=useState("admin");
-  useEffect(()=>{DB.audit.all().then(setLog);},[]);
-  if(!log)return <Skel/>;
-  const techActions=["صرفية","تغيير كلمة مرور"];
-  const adminLog=log.filter(e=>!techActions.includes(e.action));
-  const techLog=log.filter(e=>techActions.includes(e.action));
-  const renderEntry=(e,i)=><div key={i} style={{background:C.bg3,borderRadius:11,padding:"10px 13px",marginBottom:6,borderLeft:`3px solid ${tab==="admin"?C.blue:C.green}`}}>
-    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
-      <Badge color={tab==="admin"?C.blue:C.green} small>{e.action}</Badge>
-      <span style={{fontWeight:600,fontSize:13}}>{e.detail}</span>
-    </div>
-    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.muted,fontWeight:500}}>
-      <span>👤 {e.actor}</span><span>🕐 {e.at}</span>
-    </div>
-  </div>;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:13}}>🔍 سجل التدقيق</div>
-    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
-      <button onClick={()=>setTab("admin")} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="admin"?C.bg4:"transparent",color:tab==="admin"?C.text:C.muted,fontWeight:tab==="admin"?700:400,fontSize:13}}>🔑 عمليات الإداري ({adminLog.length})</button>
-      <button onClick={()=>setTab("tech")} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab==="tech"?C.bg4:"transparent",color:tab==="tech"?C.text:C.muted,fontWeight:tab==="tech"?700:400,fontSize:13}}>🛠 عمليات الفنيين ({techLog.length})</button>
-    </div>
-    {tab==="admin"&&(adminLog.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:adminLog.map(renderEntry))}
-    {tab==="tech"&&(techLog.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:techLog.map(renderEntry))}
-  </div>;
-}
-
-function AdminViewers({user,toast}){
-  const [viewers,setViewers]=useState(null);const [modal,setModal]=useState(false);const [form,setForm]=useState({username:"",password:"",displayName:""});const [saving,setSaving]=useState(false);
-  const load=()=>DB.viewers.all().then(setViewers);useEffect(()=>{load();},[]);
-  const add=async()=>{
-    if(!form.username.trim()||!form.password.trim()){toast("أكمل الحقول","error");return;}
-    if(await DB.viewers.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}setSaving(true);
-    try{await DB.viewers.add(form.username.trim(),form.password.trim(),form.displayName.trim());await DB.audit.add(user.displayName,"إضافة viewer",form.username);load();setModal(false);setForm({username:"",password:"",displayName:""});toast("✅ تم إنشاء الحساب");}
-    catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
-  };
-  if(!viewers)return <Skel/>;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-      <div style={{fontWeight:800,fontSize:18}}>👁 المشاهدين</div>
-      <Btn onClick={()=>setModal(true)} color={C.purple} size="sm" icon="+">إضافة</Btn>
-    </div>
-    <div style={{background:`${C.purple}15`,border:`1px solid ${C.purple}40`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.purple}}>صلاحية المشاهد: عرض فقط بدون تعديل</div>
-    {viewers.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد مشاهدين</div>
-    :viewers.map(v=><Card key={v.id} style={{padding:"11px 15px",marginBottom:8}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div><div style={{fontWeight:700}}>{v.displayName||v.username}</div><div style={{color:C.muted,fontSize:12}}>@{v.username}</div></div>
-        <div style={{display:"flex",gap:5}}><Badge color={C.purple} small>👁 viewer</Badge><Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${v.username}؟`)){await DB.viewers.del(v.id);await DB.audit.add(user.displayName,"حذف viewer",v.username);load();toast("🗑 تم");}}}>🗑</Btn></div>
-      </div>
-    </Card>)}
-    <Modal open={modal} onClose={()=>setModal(false)} title="➕ إضافة مشاهد">
-      <Inp label="الاسم (اختياري)" value={form.displayName} onChange={v=>setForm({...form,displayName:v})} placeholder="الاسم الكامل"/>
-      <Inp label="اسم المستخدم *" value={form.username} onChange={v=>setForm({...form,username:v})} placeholder="viewer1"/>
-      <Inp label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
-      <Btn onClick={add} color={C.purple} full loading={saving} style={{marginTop:4}}>إنشاء الحساب ✓</Btn>
-    </Modal>
-  </div>;
-}
-
-// ── Admin Admins ──────────────────────────────────────
-function AdminAdmins({user,toast}){
-  const [admins,setAdmins]=useState(null);const [modal,setModal]=useState(null);const [form,setForm]=useState({username:"",password:"",displayName:""});const [saving,setSaving]=useState(false);
-  const load=()=>DB.admins.all().then(setAdmins);useEffect(()=>{load();},[]);
-  const add=async()=>{
-    if(!form.username.trim()||!form.password.trim()){toast("أكمل الحقول","error");return;}
-    if(form.password.length<4){toast("كلمة المرور قصيرة","error");return;}
-    if(await DB.admins.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}setSaving(true);
-    try{await DB.admins.add(form.username.trim(),form.password.trim(),form.displayName.trim()||form.username.trim());await DB.audit.add(user.displayName,"إضافة أدمن",form.username.trim());load();setModal(null);setForm({username:"",password:"",displayName:""});toast("✅ تم إنشاء حساب الأدمن");}
-    catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
-  };
-  if(!admins)return <Skel/>;
-  const master=admins.find(a=>a.id===1);
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
-      <div style={{fontWeight:800,fontSize:18}}>🔑 الأدمنز</div>
-      <Btn onClick={()=>setModal("add")} color={C.blue} size="sm" icon="+">إضافة أدمن</Btn>
-    </div>
-    {user.username==="sattar141"&&master&&<div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}40`,borderRadius:12,padding:"11px 15px",marginBottom:13}}>
-      <div style={{color:C.blue,fontWeight:700,fontSize:12,marginBottom:7}}>⭐ بيانات الأدمن الرئيسي</div>
-      <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-        <div style={{background:C.bg3,borderRadius:8,padding:"5px 11px",fontSize:12}}><span style={{color:C.muted}}>يوزر: </span><span style={{color:C.text,fontWeight:700}}>{master.username}</span></div>
-        <div style={{background:C.bg3,borderRadius:8,padding:"5px 11px",fontSize:12}}><span style={{color:C.green,fontWeight:700}}>Administrator</span></div>
-      </div>
-    </div>}
-    <div style={{background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.blue}}>كل الأدمنز يملكون نفس الصلاحيات الكاملة</div>
-    {admins.map(a=><Card key={a.id} style={{padding:"11px 15px",marginBottom:8}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div><div style={{fontWeight:700,fontSize:15}}>{a.displayName}</div><div style={{color:C.muted,fontSize:12}}>@{a.username}</div></div>
-        <div style={{display:"flex",gap:5,alignItems:"center"}}>
-          <Badge color={C.blue} small>🔑 Admin</Badge>
-          {a.id===1&&<Badge color={C.green} small>⭐ رئيسي</Badge>}
-          {a.id!==1&&<Btn size="sm" color={C.purple} onClick={()=>setModal({type:"pw",admin:a})}>🔑</Btn>}
-          {a.id!==1&&<Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${a.username}؟`)){await DB.admins.del(a.id);await DB.audit.add(user.displayName,"حذف أدمن",a.username);load();toast("🗑 تم");}}}>🗑</Btn>}
-        </div>
-      </div>
-    </Card>)}
-    <Modal open={modal==="add"} onClose={()=>setModal(null)} title="➕ إضافة أدمن جديد">
-      <div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}30`,borderRadius:9,padding:"8px 13px",marginBottom:13,fontSize:12,color:C.blue}}>⚠️ الأدمن الجديد يملك نفس صلاحياتك الكاملة</div>
-      <Inp label="الاسم (اختياري)" value={form.displayName} onChange={v=>setForm({...form,displayName:v})} placeholder="الاسم الكامل"/>
-      <Inp label="اسم المستخدم *" value={form.username} onChange={v=>setForm({...form,username:v})} placeholder="admin2"/>
-      <Inp label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
-      <Btn onClick={add} color={C.blue} full loading={saving} style={{marginTop:6}}>إنشاء الحساب ✓</Btn>
-    </Modal>
-    <Modal open={modal?.type==="pw"} onClose={()=>setModal(null)} title={`🔑 تغيير كلمة مرور — ${modal?.admin?.username}`}>
-      {modal?.admin&&<ResetAdminPw admin={modal.admin} onDone={async()=>{await DB.audit.add(user.displayName,"تغيير كلمة مرور أدمن",modal.admin.username);setModal(null);toast("✅ تم");}}/>}
-    </Modal>
-  </div>;
-}
-function ResetAdminPw({admin,onDone}){
-  const [pw,setPw]=useState("");const [s,setS]=useState(false);
-  return <><div style={{color:C.muted,fontSize:12,marginBottom:10}}>المستخدم: <strong style={{color:C.text}}>{admin.username}</strong></div>
-    <Inp label="كلمة المرور الجديدة *" type="password" value={pw} onChange={setPw} placeholder="••••••"/>
-    <Btn loading={s} onClick={async()=>{if(pw.length<4){alert("قصيرة جداً");return;}setS(true);await DB.admins.changePw(admin.id,pw);onDone();}} color={C.purple} full style={{marginTop:6}}>حفظ ✓</Btn></>;
-}
-
-// ── Tech Dash ─────────────────────────────────────────
-function ViewerApp({user,onLogout}){
-  const [page,setPage]=useState("dash");
-  const tabs=[{id:"dash",icon:"📊",label:"نظرة عامة"},{id:"hist",icon:"📋",label:"السجل"},{id:"items",icon:"🔧",label:"المعدات"}];
-  const render=()=>page==="dash"?<AdminDash/>:page==="hist"?<AdminHistory/>:<ViewerItems/>;
-  return <>
-    <div style={{position:"sticky",top:0,zIndex:300,background:C.bg2,borderBottom:`1px solid ${C.border}`,padding:"10px 15px",maxWidth:"var(--mw,500px)",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-      <div style={{display:"flex",alignItems:"center",gap:7}}><Dot c={C.purple} pulse/><span style={{fontWeight:700,fontSize:13}}>Space Link</span></div>
-      <div style={{display:"flex",gap:7,alignItems:"center"}}><Badge color={C.purple} small>👁 Viewer</Badge><button onClick={onLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button></div>
-    </div>
-    <div style={{maxWidth:"var(--mw,500px)",margin:"0 auto",paddingBottom:90}}>{render()}</div>
-    <nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:"var(--mw,500px)",background:C.bg2,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
-      {tabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flex:1,padding:"9px 4px 7px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer"}}>
-        <span style={{fontSize:19}}>{t.icon}</span><span style={{fontSize:10,color:page===t.id?C.purple:C.muted,fontWeight:page===t.id?700:400}}>{t.label}</span>
-        {page===t.id&&<div style={{width:14,height:2,borderRadius:1,background:C.purple}}/>}
-      </button>)}
-    </nav>
-  </>;
-}
-function ViewerItems(){
-  const gs=useGS(["items"]);const items=gs.items||[];
-  if(!gs.items)return <Skel/>;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:13}}>🔧 قائمة المعدات</div>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {items.map(it=><Card key={it.id} style={{padding:0,overflow:"hidden"}}>
-        {it.image?<img src={it.image} style={{width:"100%",height:76,objectFit:"cover"}} alt=""/>:<div style={{height:76,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>📦</div>}
-        <div style={{padding:"8px 10px"}}><div style={{fontWeight:700,fontSize:13}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>{it.unit} · {it.category}</div></div>
-      </Card>)}
-    </div>
-  </div>;
-}
-
-// ── Root App ──────────────────────────────────────────
-// ── Toast Queue ────────────────────────────────────────
-function ToastStack({toasts}){
-  if(!toasts.length)return null;
-  return <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9000,display:"flex",flexDirection:"column",gap:7,alignItems:"center",pointerEvents:"none"}}>
-    {toasts.map(t=>{
-      const c=t.type==="error"?C.red:t.type==="warn"?C.amber:C.green;
-      return <div key={t.id} style={{background:C.bg2,border:`1px solid ${c}50`,color:c,padding:"10px 20px",borderRadius:12,fontWeight:700,fontSize:13,animation:"fadeUp .25s ease",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center",backdropFilter:"blur(8px)",boxShadow:`0 4px 20px ${c}20`}}>{t.msg}</div>;
-    })}
-  </div>;
-}
-
-// ── Realtime Status Indicator ──────────────────────────
-function RTDot(){
-  const [st,setSt]=useState('connecting');
-  useEffect(()=>{
-    const id=setInterval(()=>{
-      if(!RT._active)setSt('off');
-      else if(RT._channels.length===0)setSt('connecting');
-      else setSt('live');
-    },2000);
-    return()=>clearInterval(id);
-  },[]);
-  if(st==='off')return null;
-  const c=st==='live'?C.green:C.amber;
-  return <div style={{display:"flex",alignItems:"center",gap:4,background:`${c}15`,border:`1px solid ${c}40`,borderRadius:7,padding:"2px 7px",fontSize:10,color:c,fontWeight:700}}>
-    <Dot c={c} pulse={st==='live'}/>
-    {st==='live'?'مباشر':'اتصال...'}
-  </div>;
-}
-
-// ── Root App ──────────────────────────────────────────
-function App(){
-  const [user,setUser]=useState(()=>{try{const s=localStorage.getItem("sl_session");return s?JSON.parse(s):null;}catch{return null;}});
-  const [page,setPage]=useState("dash");const navRef=useRef();
-  const [toasts,setToasts]=useState([]);
-  const showToast=useCallback((msg,type="success")=>{
-    const id=Date.now()+Math.random();
-    setToasts(q=>[...q.slice(-3),{id,msg,type}]);
-    setTimeout(()=>setToasts(q=>q.filter(t=>t.id!==id)),3200);
-  },[]);
-  const doLogin=u=>{setUser(u);setPage("dash");};
-  const doLogout=()=>{
-    RT.unsubscribe();
-    setUser(null);setPage("dash");
-    localStorage.removeItem("sl_session");
-    GS.inval("items","techs","receipts","expenses");
-  };
-
-  useEffect(()=>{
-    GS.ping().then(()=>DB.admins.seed());
-    const keepAlive=setInterval(()=>{
-      fetch(`${SB_URL}/rest/v1/admin_user?limit=1`,{headers:{apikey:SB_KEY}}).catch(()=>{});
-    },4*60*1000);
-    return()=>clearInterval(keepAlive);
-  },[]);
-
-  useEffect(()=>{
-    if(user){
-      GS.load(["items","techs","receipts","expenses"]).then(gs=>{
-        SQ.flush();
-        if(user.role==="admin"&&gs.items&&gs.receipts&&gs.expenses){
-          const lowItems=gs.items.filter(it=>{
-            const rec=(gs.receipts||[]).filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
-            const sp=(gs.expenses||[]).filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
-            return (rec-sp)<=it.threshold;
-          });
-          if(lowItems.length>0)setTimeout(()=>showToast(`⚠️ ${lowItems.length} مواد تحت حد التنبيه: ${lowItems.slice(0,2).map(i=>i.name).join("، ")}${lowItems.length>2?"...":""}`, "warn"),1500);
-        }
-      });
-      // Initialize Supabase Realtime
-      RT.init();
-      RT.subscribe();
-      const retryTimer=setInterval(()=>{if(GS._status==='error')GS.forceReload();},30000);
-      return()=>{clearInterval(retryTimer);RT.unsubscribe();};
+  
+  const addLine=()=>setRlines(l=>[...l,{iid:"",qty:1}]);
+  const remLine=i=>setRlines(l=>l.filter((_,j)=>j!==i));
+  const updLine=(i,k,v)=>setRlines(l=>l.map((x,j)=>j===i?{...x,[k]:v}:x));
+  
+  const submit=async()=>{
+    if(!tid){toast("اختر الفني","error");return;}
+    const valid=rlines.filter(l=>l.iid&&l.qty>0);
+    if(!valid.length){toast("أضف مادة واحدة على الأقل","error");return;}
+    
+    // Validation
+    for(let l of valid){
+      const bal=getBal(l.iid);
+      if(bal===null || l.qty>bal){
+        const it=items.find(x=>x.id===+l.iid);
+        toast(`الكمية المصروفة لـ ${it?.name||''} أكبر من رصيد الفني (${bal})`,"error");
+        return;
+      }
     }
-  },[user]);
 
+    setSaving(true);
+    try{
+      const t=techs.find(x=>x.id===+tid);
+      const groupId=Date.now().toString()+"_"+(subName||"");
+      await Promise.all(valid.map(l=>{
+        const it=items.find(x=>x.id===+l.iid);
+        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:subUser||null, notes:notes||null, location:location||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name} - ${subName||"غير محدد"}`));
+      }));
+      await GS.reload("expenses");
+      setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
+      setRlines([{iid:"",qty:1}]);
+      setSubName("");setSubUser("");setLocation("");setNotes("");
+      toast("✅ تم تسجيل الصرفية");
+    }catch(e){toast("خطأ: "+e.message,"error");}
+    setSaving(false);
+  };
+  
+  return <div className="page" style={{padding:"16px 14px"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
+      <div style={{fontWeight:800,fontSize:18}}>💳 تسجيل صرفية</div>
+    </div>
+    
+    <Card style={{padding:15,marginBottom:13}}>
+      <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
+      <div style={{height:1,background:C.border,margin:"15px 0"}}/>
+      <div style={{color:C.blue,fontWeight:700,fontSize:13,marginBottom:10}}>تفاصيل العملية (تُطبق على كل المواد)</div>
+      <Inp label="اسم المشترك / الموقع" value={subName} onChange={setSubName} placeholder="مثال: علي محمد..."/>
+      <div style={{display:"flex",gap:10}}>
+        <div style={{flex:1}}><Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="اختياري..."/></div>
+        <div style={{flex:1}}><Inp label="إحداثيات الموقع" value={location} onChange={setLocation} placeholder="اختياري..."/></div>
+      </div>
+      <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
+      
+      <div style={{height:1,background:C.border,margin:"15px 0"}}/>
+      
+      <div style={{color:C.muted,fontSize:11,marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontWeight:700}}>المواد المصروفة</span>
+        <span style={{color:C.blue,fontSize:10}}>{rlines.filter(l=>l.iid).length} مادة محددة</span>
+      </div>
+      {rlines.map((ln,i)=>{
+        const bal=getBal(ln.iid);
+        const it=items.find(x=>x.id===+ln.iid);
+        return <div key={i} className="animate-list-item" style={{background:C.bg3,borderRadius:12,padding:"11px 12px",marginBottom:8,border:`1px solid ${ln.iid?C.blue+"40":C.border}`,animationDelay:`${i*0.05}s`}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+            <select value={ln.iid} onChange={e=>updLine(i,"iid",e.target.value)} style={{flex:1,background:C.bg4,border:`1px solid ${C.border}`,color:ln.iid?C.text:C.muted,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",appearance:"none",fontFamily:"inherit"}}>
+              <option value="">اختر المادة…</option>
+              {items.map(it2=><option key={it2.id} value={String(it2.id)}>{it2.name} ({it2.unit})</option>)}
+            </select>
+            {rlines.length>1&&<button onClick={()=>remLine(i)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:15,flexShrink:0}}>✕</button>}
+          </div>
+          {bal!==null&&<div style={{color:bal<0?C.red:C.blue,fontSize:11,marginBottom:7}}>رصيد الفني المتوفر: <strong>{bal} {it?.unit}</strong>{bal<=0&&<Badge color={C.red} small>لا يوجد رصيد</Badge>}</div>}
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{color:C.muted,fontSize:11,flexShrink:0}}>الكمية المصروفة:</div>
+            <QtyPick value={ln.qty} onChange={v=>updLine(i,"qty",v)}/>
+          </div>
+        </div>;
+      })}
+      <button onClick={addLine} style={{width:"100%",background:`${C.blue}12`,border:`2px dashed ${C.blue}35`,color:C.blue,borderRadius:11,padding:"10px",fontSize:13,cursor:"pointer",fontWeight:700,marginBottom:11,fontFamily:"inherit"}}>+ إضافة مادة أخرى للصرفية</button>
+      
+      {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:9,padding:"9px 13px",color:C.green,fontSize:13,marginBottom:10,fontWeight:700}}>✅ {ok}</div>}
+      <Btn onClick={submit} color={C.blue} full size="lg" loading={saving}>💳 تسجيل الصرفية المجمعة</Btn>
+    </Card>
+  </div>;
+}
+
+// ── Admin Reports ─────────────────────────────────────
+function AdminReports(){
+  return <div className="page" style={{padding:"16px 14px"}}>
+    <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📈 التقارير والإحصائيات</div>
+    <Card style={{padding:20,textAlign:"center",color:C.muted}}>
+      <div>التقارير قيد التطوير... سيتم إضافتها قريباً.</div>
+    </Card>
+  </div>;
+}
+
+// ── Admin App ─────────────────────────────────────────
+function AdminApp({user,toast:showToast,doLogout}){
+  const [page,setPage]=useState("dash");
+  const navRef=useRef(null);
+  
   useEffect(()=>{
     const el=navRef.current;if(!el)return;
     const h=e=>{
@@ -1904,15 +1652,10 @@ function App(){
     {id:"techs",icon:"👷",label:"الفنيين"},
     {id:"items",icon:"🔧",label:"المعدات"},
     {id:"receipt",icon:"📦",label:"تسليم"},
+    {id:"expense",icon:"💳",label:"صرفية"},
     {id:"history",icon:"📋",label:"السجل"},
-    {id:"reports",icon:"📈",label:"تقارير"},
-    {id:"audit",icon:"🔍",label:"تدقيق"},
-    {id:"viewers",icon:"👁",label:"Viewers"},
-    {id:"admins",icon:"🔑",label:"Admins"},
+    {id:"reports",icon:"📈",label:"تقارير"}
   ];
-
-  if(!user)return <><style>{css}</style><Login onLogin={doLogin}/></>;
-  if(user.role==="viewer")return <><style>{css}</style><ToastStack toasts={toasts}/><ViewerApp user={user} onLogout={doLogout}/></>;
 
   const color=C.blue;
 
@@ -1921,17 +1664,14 @@ function App(){
     case"techs":return<AdminTechs user={user} toast={showToast}/>;
     case"items":return<AdminItems user={user} toast={showToast}/>;
     case"receipt":return<AdminReceipt user={user} toast={showToast}/>;
+    case"expense":return<AdminExpense user={user} toast={showToast}/>;
     case"history":return<AdminHistory/>;
     case"reports":return<AdminReports toast={showToast}/>;
-    case"audit":return<AdminAudit/>;
-    case"viewers":return<AdminViewers user={user} toast={showToast}/>;
-    case"admins":return<AdminAdmins user={user} toast={showToast}/>;
     default:return<AdminDash user={user}/>;
   }};
 
   return <>
     <style>{css}</style>
-    <ToastStack toasts={toasts}/>
     {/* Desktop sidebar */}
     <div className="sb">
       <div style={{padding:"20px 16px",display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${C.border}`,marginBottom:8}}>
@@ -1973,6 +1713,55 @@ function App(){
     </nav>
   </>;
 }
+
+// ── App Boot ──────────────────────────────────────────
+function App(){
+  const [user,setUser]=useState(null);
+  const [toasts,setToasts]=useState([]);
+  const showToast=(msg,type="success")=>{
+    const id=Date.now();
+    setToasts(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000);
+  };
+  
+  useEffect(()=>{
+    sb.auth.getUser().then(({data})=>{if(data?.user){
+      sb.db.from('admins').select('*').eq('id',data.user.id).single().then(({data:adminData})=>{
+        if(adminData) setUser({id:data.user.id, role:"admin", username:adminData.username, displayName:adminData.display_name});
+      });
+    }});
+    const {data:{subscription}}=sb.auth.onAuthStateChange((evt,session)=>{
+      if(!session) setUser(null);
+    });
+    return ()=>subscription?.unsubscribe();
+  },[]);
+  
+  const doLogin=async(u,p)=>{
+    const {data,error}=await sb.db.from('admins').select('*').eq('username',u).single();
+    if(error||!data) return "اسم المستخدم غير صحيح";
+    if(data.password!==p) return "كلمة المرور غير صحيحة";
+    const {data:authData,error:authErr}=await sb.auth.signInWithPassword({email:u+"@spacelink.local",password:p});
+    if(authErr) return "خطأ في تسجيل الدخول: "+authErr.message;
+    setUser({id:authData.user.id, role:"admin", username:data.username, displayName:data.display_name});
+    return null;
+  };
+  
+  const doLogout=async()=>{
+    await sb.auth.signOut();
+    setUser(null);
+  };
+
+  if(!user) return <><style>{css}</style><ToastStack toasts={toasts}/><Login onLogin={doLogin}/></>;
+
+  return <>
+    <ToastStack toasts={toasts}/>
+    <AdminApp user={user} toast={showToast} doLogout={doLogout}/>
+  </>;
+}
+
+ReactDOM.render(<App/>, document.getElementById('root'));
+
+
 </script>
 </body>
 
