@@ -162,6 +162,7 @@ self.addEventListener('fetch',e=>{if(e.request.url.includes('supabase'))return;e
         await Promise.all([
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js'),
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'),
+          loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js').catch(() => { }),
         ]);
         const src = document.getElementById('app-src').textContent;
         let hash = 0; for (let i = 0; i < src.length; i += 80)hash = (hash * 31 + src.charCodeAt(i)) >>> 0;
@@ -377,6 +378,45 @@ const GS={
   async forceReload(){this._d={};this._p={};['items','techs','receipts','expenses'].forEach(k=>LC.del(k));await this.ping();return this.load();},
 };
 GS.loadStale();
+
+// â”€â”€ Supabase Realtime â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const RT={
+  _client:null,_channels:[],_active:false,
+  init(){
+    if(this._active||!window.supabase)return;
+    try{
+      this._client=window.supabase.createClient(SB_URL,SB_KEY,{
+        realtime:{params:{eventsPerSecond:10}},
+        auth:{persistSession:false,autoRefreshToken:false}
+      });
+      this._active=true;
+    }catch(e){console.warn('[RT] init failed:',e.message);}
+  },
+  subscribe(){
+    if(!this._active||this._channels.length)return;
+    const tables=['receipts','expenses','items','technicians'];
+    tables.forEach(table=>{
+      const ch=this._client
+        .channel('sl:'+table)
+        .on('postgres_changes',{event:'*',schema:'public',table},(payload)=>{
+          console.log('[RT]',table,payload.eventType);
+          const gsKey=table==='technicians'?'techs':table;
+          LC.del(gsKey);
+          GS.reload(gsKey);
+        })
+        .subscribe((status)=>{
+          if(status==='SUBSCRIBED')console.log('[RT] subscribed:',table);
+          if(status==='CHANNEL_ERROR')console.warn('[RT] channel error:',table);
+        });
+      this._channels.push(ch);
+    });
+  },
+  unsubscribe(){
+    if(!this._client)return;
+    this._channels.forEach(ch=>{try{this._client.removeChannel(ch);}catch{}});
+    this._channels=[];
+  },
+};
 
 function useGS(keys){
   const [d,setD]=useState(()=>({...GS.get()}));
@@ -784,6 +824,20 @@ function AdminDash({user}){
   const todayE=E.filter(e=>isToday(e.createdAt));
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
   const techSum=T.map(t=>{const b=calcBals(t.id,I,R,E);return{...t,bal:b.reduce((s,x)=>s+x.balance,0),low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length,cnt:b.length};});
+
+  // ── Smart Insights (memoized) ──────────────────────────
+  const insights=useMemo(()=>{
+    if(!T.length||!E.length)return null;
+    const techAct=T.map(t=>({...t,total:E.filter(e=>e.techId===t.id).reduce((s,e)=>s+e.quantity,0)}));
+    const topTech=techAct.reduce((a,b)=>b.total>a.total?b:a,techAct[0]);
+    const leastTech=techAct.reduce((a,b)=>b.total<a.total?b:a,techAct[0]);
+    const topItemId=Object.entries(um).sort((a,b)=>b[1].total-a[1].total)[0]?.[0];
+    const topItem=um[topItemId];
+    const activeDays=new Set(E.map(e=>e.createdAt?.slice(0,10)).filter(Boolean)).size||1;
+    const dailyAvg=(E.reduce((s,e)=>s+e.quantity,0)/activeDays).toFixed(1);
+    return{topTech,leastTech,topItem,dailyAvg};
+  },[T,E,um]);
+
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div></div>
     {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}18,${C.red}10)`,border:`1px solid ${C.amber}50`,borderRadius:12,padding:"11px 13px",marginBottom:14}}>
@@ -793,6 +847,27 @@ function AdminDash({user}){
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
       {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 15px"}} glow={c}><div style={{fontSize:20,marginBottom:3}}>{ic}</div><div style={{fontSize:22,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{l}</div></Card>)}
     </div>
+
+    {/* Smart Insights */}
+    {insights&&<Card style={{padding:"14px 13px",marginBottom:12,border:`1px solid ${C.blue}30`,background:`linear-gradient(135deg,${C.bg2},${C.bg3})`}}>
+      <div style={{fontWeight:700,fontSize:12,marginBottom:11,color:C.blue,display:"flex",alignItems:"center",gap:6}}>
+        <span>🤖</span> رؤى ذكية
+        <Badge color={C.blue} small>مبني على البيانات</Badge>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {[
+          ["🏆","الأكثر نشاطاً",insights.topTech?.name,C.green],
+          ["😴","الأقل نشاطاً",insights.leastTech?.name,C.amber],
+          ["🔥","الأكثر استخداماً",insights.topItem?.name,C.red],
+          ["⏱","متوسط يومي",`${insights.dailyAvg} وحدة`,C.cyan],
+        ].map(([ic,l,v,c])=><div key={l} style={{background:C.bg4,borderRadius:10,padding:"9px 11px",display:"flex",flexDirection:"column",gap:3}}>
+          <div style={{fontSize:16}}>{ic}</div>
+          <div style={{color:C.muted,fontSize:10}}>{l}</div>
+          <div style={{color:c,fontWeight:700,fontSize:12,wordBreak:"break-word"}}>{v||"—"}</div>
+        </div>)}
+      </div>
+    </Card>}
+
     <Card style={{padding:"14px 11px",marginBottom:12}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:10,color:C.muted}}>📊 آخر 7 أيام</div>
       <BarSVG data={daily} keys={["تسليم","صرفية"]} colors={[C.green,C.amber]} h={150}/>
@@ -811,20 +886,18 @@ function AdminDash({user}){
       <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>👷 ملخص الفنيين</div>
       {techSum.length===0?<div style={{color:C.muted,fontSize:13,textAlign:"center",padding:14}}>لا يوجد فنيين</div>
       :techSum.map(t=>{
-        // Check last activity
         const lastExp=E.filter(e=>e.techId===t.id).reduce((m,e)=>e.createdAt>m?e.createdAt:m,"");
         const daysSince=lastExp?Math.floor((Date.now()-new Date(lastExp.replace(/[\/]/g,"-")))/86400000):-1;
         const inactive=daysSince>1;
         return <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
           <div>
-            <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{fontWeight:700}}>{t.name}</div>{inactive&&daysSince>=0&&<Badge color={C.red} small>😴 {daysSince} يوم بدون نشاط</Badge>}</div>
-            <div style={{color:C.muted,fontSize:11}}>{t.cnt} نوع · {lastExp?`آخر نشاط: ${lastExp.slice(0,10)}`:"لا يوجد نشاط"}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{fontWeight:700}}>{t.name}</div>{inactive&&daysSince>=0&&<Badge color={C.red} small>😴 {daysSince} يوم</Badge>}</div>
+            <div style={{color:C.muted,fontSize:11}}>{t.cnt} نوع · {lastExp?`آخر: ${lastExp.slice(0,10)}`:"لا نشاط"}</div>
           </div>
           <div style={{textAlign:"right"}}><div style={{color:t.bal>0?C.green:C.red,fontWeight:700}}>{t.bal} وحدة</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
         </div>;
       })}
     </Card>
-    {/* Daily summary */}
     <Card style={{padding:"14px 13px"}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
       {(()=>{
@@ -840,6 +913,7 @@ function AdminDash({user}){
     </Card>
   </div>;
 }
+
 
 // ── Admin Techs ───────────────────────────────────────
 function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
@@ -1313,6 +1387,57 @@ function AdminHistory(){
   </div>;
 }
 
+// ── AI Predictions ────────────────────────────────────
+function AIPredictions({items,expenses,receipts}){
+  const predictions=useMemo(()=>{
+    const days14=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-13+i);return d.toISOString().slice(0,10);});
+    return items.map(it=>{
+      const daily=days14.map(d=>expenses.filter(e=>e.itemId===it.id&&(e.createdAt?.startsWith(d)||e.createdAt?.includes(d.replace(/-/g,"/")))).reduce((s,e)=>s+e.quantity,0));
+      const avg=daily.reduce((s,v)=>s+v,0)/14;
+      const rec=receipts.filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
+      const sp=expenses.filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
+      const stock=rec-sp;
+      const daysLeft=avg>0?Math.floor(stock/avg):null;
+      const r7=daily.slice(7).reduce((s,v)=>s+v,0);
+      const p7=daily.slice(0,7).reduce((s,v)=>s+v,0);
+      const trendPct=p7===0?(r7>0?100:0):Math.round(((r7-p7)/p7)*100);
+      const suggestBuy=avg>0?Math.max(0,Math.ceil(avg*30-stock)):0;
+      return{...it,stock,avg:avg.toFixed(2),daysLeft,trendPct,suggestBuy};
+    }).filter(it=>+it.avg>0).sort((a,b)=>(a.daysLeft??9999)-(b.daysLeft??9999));
+  },[items,expenses,receipts]);
+
+  if(!predictions.length)return <div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد بيانات كافية للتنبؤ</div>;
+  return <div>
+    <div style={{background:`${C.blue}12`,border:`1px solid ${C.blue}30`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.blue}}>
+      🤖 التنبؤات مبنية على متوسط الاستهلاك اليومي خلال آخر 14 يوم
+    </div>
+    {predictions.map((it,i)=>{
+      const urgency=it.daysLeft!==null&&it.daysLeft<=3?C.red:it.daysLeft!==null&&it.daysLeft<=10?C.amber:C.green;
+      const trendCol=it.trendPct>10?C.red:it.trendPct>0?C.amber:C.green;
+      return <Card key={i} style={{marginBottom:9,padding:"13px 15px",border:`1px solid ${urgency}30`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+          <div style={{fontWeight:700,fontSize:14}}>{it.name}</div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",justifyContent:"flex-end"}}>
+            {it.daysLeft!==null&&<Badge color={urgency} small>{it.daysLeft<=0?"نفذ!":it.daysLeft+" يوم متبقي"}</Badge>}
+            {it.trendPct!==0&&<Badge color={trendCol} small>{it.trendPct>0?"↑":"↓"}{Math.abs(it.trendPct)}% اتجاه</Badge>}
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:6,marginBottom:8}}>
+          {[["المخزون",`${it.stock} ${it.unit}`,urgency],["يومياً",`${it.avg} ${it.unit}`,C.muted],["الاتجاه",`${it.trendPct>0?"+":""}${it.trendPct}%`,trendCol],["شراء مقترح",`${it.suggestBuy} ${it.unit}`,C.purple]].map(([l,v,c])=>
+            <div key={l} style={{background:C.bg3,borderRadius:8,padding:"7px",textAlign:"center"}}>
+              <div style={{color:c,fontWeight:700,fontSize:12,wordBreak:"break-word"}}>{v}</div>
+              <div style={{color:C.muted,fontSize:10}}>{l}</div>
+            </div>
+          )}
+        </div>
+        {+it.suggestBuy>0&&<div style={{background:`${C.purple}12`,border:`1px solid ${C.purple}30`,borderRadius:8,padding:"6px 11px",fontSize:11,color:C.purple}}>
+          💡 يُنصح بشراء {it.suggestBuy} {it.unit} لتوفير احتياطي شهر
+        </div>}
+      </Card>;
+    })}
+  </div>;
+}
+
 function AdminReports({toast}){
   const [tab,setTab]=useState("overview");
   const gs=useGS(["techs","expenses","receipts","items"]);
@@ -1320,16 +1445,14 @@ function AdminReports({toast}){
   const [dateTo,setDateTo]=useState(today);
   if(!gs.techs)return <Skel/>;
   const {techs,expenses,receipts,items,techStats,topItems,lineData,totalRemaining}=buildReportData(gs);
+
   const shareWhatsApp=()=>{
-    const {techStats,totalRemaining}=buildReportData(gs);
-    let msg=`📊 *تقرير Space Link*\n`;
-    msg+=`📅 ${dateFrom} → ${dateTo}\n\n`;
-    msg+=`👷 *ملخص الفنيين:*\n`;
+    let msg=`📊 *تقرير Space Link*\n📅 ${dateFrom} → ${dateTo}\n\n👷 *ملخص الفنيين:*\n`;
     techStats.forEach(t=>{msg+=`• ${t.name}: استلم ${t.received} | صرف ${t.spent} | متبقي ${t.remaining}\n`;});
-    msg+=`\n📊 المتبقي الإجمالي: ${totalRemaining} وحدة\n`;
-    msg+=`\n🔗 Space Link — نظام إدارة مكتب الإنترنت`;
+    msg+=`\n📊 المتبقي الإجمالي: ${totalRemaining} وحدة\n🔗 Space Link`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,'_blank');
   };
+
   const exportExcel=()=>{
     const fd=arr=>arr.filter(r=>{const d=r.createdAt?.slice(0,10)||"";return d>=dateFrom&&d<=dateTo;});
     let csv="\uFEFF";csv+=`تقرير Space Link\nالفترة: ${dateFrom} إلى ${dateTo}\n\n`;
@@ -1343,6 +1466,53 @@ function AdminReports({toast}){
     topItems.forEach((x,i)=>{csv+=`${i+1},${x.name},${x.total},${x.unit}\n`;});
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`SpaceLink_${dateFrom}_${dateTo}.csv`;a.click();toast("✅ تم تصدير Excel");
   };
+
+  const exportPDF=()=>{
+    const html=`<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>تقرير Space Link</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Tahoma,Arial,sans-serif;background:#fff;color:#111;padding:28px 32px;direction:rtl;font-size:13px}
+  .header{display:flex;align-items:center;gap:14px;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid #4F8EF7}
+  .logo{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#2563EB,#4F8EF7);display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;flex-shrink:0}
+  h1{font-size:20px;font-weight:800;color:#111}
+  .meta{color:#666;font-size:12px;margin-top:2px}
+  h2{font-size:14px;font-weight:700;color:#2563EB;margin:20px 0 8px;padding-bottom:4px;border-bottom:1px solid #E0E8FF}
+  table{width:100%;border-collapse:collapse;margin-bottom:16px}
+  th{background:#EEF4FF;color:#2563EB;padding:7px 10px;text-align:right;font-weight:700;font-size:12px;border:1px solid #D0DEFF}
+  td{padding:6px 10px;border:1px solid #E8EDF5;font-size:12px}
+  tr:nth-child(even) td{background:#F8FAFF}
+  .green{color:#059669;font-weight:700}.red{color:#DC2626;font-weight:700}.amber{color:#D97706;font-weight:700}
+  .summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+  .stat-box{border:1px solid #E8EDF5;border-radius:10px;padding:12px;text-align:center}
+  .stat-val{font-size:22px;font-weight:800;margin-bottom:3px}
+  .stat-lbl{font-size:11px;color:#666}
+  .footer{margin-top:24px;padding-top:12px;border-top:1px solid #E0E8FF;font-size:11px;color:#999;display:flex;justify-content:space-between}
+  @media print{body{padding:16px}@page{size:A4;margin:1.5cm}}
+</style></head><body>
+<div class="header">
+  <div class="logo">🌐</div>
+  <div><h1>تقرير Space Link</h1><div class="meta">📅 الفترة: ${dateFrom} ← ${dateTo} &nbsp;·&nbsp; تاريخ الطباعة: ${today()}</div></div>
+</div>
+<div class="summary-grid">
+  ${[["👷",techs.length,"الفنيين","#4F8EF7"],["🔧",items.length,"المعدات","#A78BFA"],["📦",receipts.length,"تسليمات","#10D9A0"],["📊",totalRemaining,"المتبقي الإجمالي","#22D3EE"]].map(([ic,v,l,c])=>`<div class="stat-box"><div class="stat-val" style="color:${c}">${ic} ${v}</div><div class="stat-lbl">${l}</div></div>`).join("")}
+</div>
+<h2>👷 ملخص الفنيين</h2>
+<table><tr><th>#</th><th>الفني</th><th>استلم</th><th>صرف</th><th>المتبقي</th><th>أنواع</th></tr>
+${techStats.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${t.name}</strong></td><td class="green">${t.received}</td><td class="amber">${t.spent}</td><td class="${t.remaining>0?'green':'red'}">${t.remaining}</td><td>${t.items}</td></tr>`).join("")}
+</table>
+<h2>🔥 أكثر المواد استخداماً</h2>
+<table><tr><th>#</th><th>المادة</th><th>إجمالي الاستهلاك</th><th>الوحدة</th></tr>
+${topItems.slice(0,10).map((it,i)=>`<tr><td>${i+1}</td><td><strong>${it.name}</strong></td><td class="amber">${it.total}</td><td>${it.unit}</td></tr>`).join("")}
+</table>
+<div class="footer"><span>🔗 Space Link — نظام إدارة مكتب الإنترنت</span><span>صفحة 1</span></div>
+</body></html>`;
+    const w=window.open('','_blank');
+    if(!w){toast("يُرجى السماح بالنوافذ المنبثقة","warn");return;}
+    w.document.write(html);w.document.close();
+    setTimeout(()=>w.print(),400);
+    toast("✅ جاهز للطباعة");
+  };
+
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
       <div style={{fontWeight:800,fontSize:18}}>📊 التقارير</div>
@@ -1350,12 +1520,13 @@ function AdminReports({toast}){
         <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"4px 7px",fontSize:11,outline:"none",direction:"ltr"}}/>
         <span style={{color:C.muted,fontSize:11}}>←</span>
         <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"4px 7px",fontSize:11,outline:"none",direction:"ltr"}}/>
+        <Btn onClick={exportPDF} color={C.red} size="sm" icon="🖨">PDF</Btn>
         <Btn onClick={exportExcel} color={C.green} size="sm" icon="📊">Excel</Btn>
         <Btn onClick={shareWhatsApp} color={C.greenD} size="sm" icon="💬">واتساب</Btn>
       </div>
     </div>
-    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:14,border:`1px solid ${C.border}`}}>
-      {[["overview","نظرة عامة"],["techs","الفنيين"],["items","المواد"],["trend","الاتجاه"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 2px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
+    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:14,border:`1px solid ${C.border}`,overflowX:"auto"}}>
+      {[["overview","نظرة عامة"],["techs","الفنيين"],["items","المواد"],["trend","الاتجاه"],["ai","🤖 توقعات"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12,whiteSpace:"nowrap",minWidth:60}}>{l}</button>)}
     </div>
     {tab==="overview"&&<div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
@@ -1365,7 +1536,6 @@ function AdminReports({toast}){
     </div>}
     {tab==="techs"&&(techStats.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا يوجد فنيين</div>
     :<div>
-      {/* Ranking */}
       <div style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 14px",marginBottom:12}}>
         <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>🏆 ترتيب الفنيين (حسب الصرفيات)</div>
         {[...techStats].sort((a,b)=>b.spent-a.spent).map((t,i)=>{
@@ -1374,17 +1544,14 @@ function AdminReports({toast}){
           return <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:i<techStats.length-1?`1px solid ${C.border}`:"none"}}>
             <span style={{fontSize:18,width:28}}>{medal}</span>
             <div style={{flex:1}}><div style={{fontWeight:700}}>{t.name}</div><div style={{color:C.muted,fontSize:11}}>صرف {t.spent} | أنواع {t.items}</div></div>
-            <div style={{textAlign:"right"}}><div style={{color:C.amber,fontWeight:700,fontSize:15}}>{pts} نقطة</div><div style={{color:C.muted,fontSize:10}}>نشاط</div></div>
+            <div style={{textAlign:"right"}}><div style={{color:C.amber,fontWeight:700,fontSize:15}}>{pts} نقطة</div></div>
           </div>;
         })}
       </div>
       {techStats.map((t,i)=><Card key={i} style={{padding:"13px 15px",marginBottom:9}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
           <div style={{fontWeight:700,fontSize:14}}>👷 {t.name}</div>
-          <div style={{display:"flex",gap:5}}>
-            {t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}
-            <Badge color={C.amber} small>⭐ {t.spent*10+t.items*5} نقطة</Badge>
-          </div>
+          <div style={{display:"flex",gap:5}}>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}<Badge color={C.amber} small>⭐ {t.spent*10+t.items*5} نقطة</Badge></div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:7}}>{[["استلم",t.received,C.blue],["صرف",t.spent,C.amber],["متبقي",t.remaining,C.cyan],["أنواع",t.items,C.purple]].map(([l,v,c])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:18,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}</div>
       </Card>)}
@@ -1392,7 +1559,6 @@ function AdminReports({toast}){
     {tab==="items"&&<>
       <Card style={{padding:"14px 11px",marginBottom:12}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>📊 الأكثر استخداماً</div><BarSVG data={topItems.slice(0,6).map(x=>({day:x.name.slice(0,5),total:x.total}))} keys={["total"]} colors={[C.amber]} h={150}/></Card>
       {topItems.map((it,i)=>{
-        // Consumption trend for this item (last 7 days)
         const days7=[...Array(7)].map((_,j)=>{const d=new Date();d.setDate(d.getDate()-6+j);return d.toISOString().slice(0,10);});
         const trend=days7.map(d=>({day:d.slice(8),قيمة:expenses.filter(e=>e.itemId===items.find(x=>x.name===it.name)?.id&&(e.createdAt?.startsWith(d)||e.createdAt?.includes(d.replace(/-/g,"/")))).reduce((s,e)=>s+e.quantity,0)}));
         const hasTrend=trend.some(t=>t["قيمة"]>0);
@@ -1407,8 +1573,10 @@ function AdminReports({toast}){
       })}
     </>}
     {tab==="trend"&&<Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:10}}>الاستهلاك اليومي</div><LineSVG data={lineData} dataKey="قيمة" color={C.blue} h={200}/></Card>}
+    {tab==="ai"&&<AIPredictions items={items} expenses={expenses} receipts={receipts}/>}
   </div>;
 }
+
 
 // ── Admin Audit ───────────────────────────────────────
 function AdminAudit(){
@@ -1561,23 +1729,62 @@ function ViewerItems(){
 }
 
 // ── Root App ──────────────────────────────────────────
+// ── Toast Queue ────────────────────────────────────────
+function ToastStack({toasts}){
+  if(!toasts.length)return null;
+  return <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9000,display:"flex",flexDirection:"column",gap:7,alignItems:"center",pointerEvents:"none"}}>
+    {toasts.map(t=>{
+      const c=t.type==="error"?C.red:t.type==="warn"?C.amber:C.green;
+      return <div key={t.id} style={{background:C.bg2,border:`1px solid ${c}50`,color:c,padding:"10px 20px",borderRadius:12,fontWeight:700,fontSize:13,animation:"fadeUp .25s ease",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center",backdropFilter:"blur(8px)",boxShadow:`0 4px 20px ${c}20`}}>{t.msg}</div>;
+    })}
+  </div>;
+}
+
+// ── Realtime Status Indicator ──────────────────────────
+function RTDot(){
+  const [st,setSt]=useState('connecting');
+  useEffect(()=>{
+    const id=setInterval(()=>{
+      if(!RT._active)setSt('off');
+      else if(RT._channels.length===0)setSt('connecting');
+      else setSt('live');
+    },2000);
+    return()=>clearInterval(id);
+  },[]);
+  if(st==='off')return null;
+  const c=st==='live'?C.green:C.amber;
+  return <div style={{display:"flex",alignItems:"center",gap:4,background:`${c}15`,border:`1px solid ${c}40`,borderRadius:7,padding:"2px 7px",fontSize:10,color:c,fontWeight:700}}>
+    <Dot c={c} pulse={st==='live'}/>
+    {st==='live'?'مباشر':'اتصال...'}
+  </div>;
+}
+
+// ── Root App ──────────────────────────────────────────
 function App(){
   const [user,setUser]=useState(()=>{try{const s=localStorage.getItem("sl_session");return s?JSON.parse(s):null;}catch{return null;}});
   const [page,setPage]=useState("dash");const navRef=useRef();
-  const [toast,setToast]=useState({msg:"",visible:false,type:"success"});
-  const showToast=useCallback((msg,type="success")=>{setToast({msg,visible:true,type});setTimeout(()=>setToast(t=>({...t,visible:false})),2600);},[]);
+  const [toasts,setToasts]=useState([]);
+  const showToast=useCallback((msg,type="success")=>{
+    const id=Date.now()+Math.random();
+    setToasts(q=>[...q.slice(-3),{id,msg,type}]);
+    setTimeout(()=>setToasts(q=>q.filter(t=>t.id!==id)),3200);
+  },[]);
   const doLogin=u=>{setUser(u);setPage("dash");};
-  const doLogout=()=>{setUser(null);setPage("dash");localStorage.removeItem("sl_session");GS.inval("items","techs","receipts","expenses");};
+  const doLogout=()=>{
+    RT.unsubscribe();
+    setUser(null);setPage("dash");
+    localStorage.removeItem("sl_session");
+    GS.inval("items","techs","receipts","expenses");
+  };
 
   useEffect(()=>{
-    // Wake up Supabase immediately on page load
     GS.ping().then(()=>DB.admins.seed());
-    // Keep alive every 4 minutes
     const keepAlive=setInterval(()=>{
       fetch(`${SB_URL}/rest/v1/admin_user?limit=1`,{headers:{apikey:SB_KEY}}).catch(()=>{});
     },4*60*1000);
     return()=>clearInterval(keepAlive);
   },[]);
+
   useEffect(()=>{
     if(user){
       GS.load(["items","techs","receipts","expenses"]).then(gs=>{
@@ -1591,10 +1798,14 @@ function App(){
           if(lowItems.length>0)setTimeout(()=>showToast(`⚠️ ${lowItems.length} مواد تحت حد التنبيه: ${lowItems.slice(0,2).map(i=>i.name).join("، ")}${lowItems.length>2?"...":""}`, "warn"),1500);
         }
       });
+      // Initialize Supabase Realtime
+      RT.init();
+      RT.subscribe();
       const retryTimer=setInterval(()=>{if(GS._status==='error')GS.forceReload();},30000);
-      return()=>clearInterval(retryTimer);
+      return()=>{clearInterval(retryTimer);RT.unsubscribe();};
     }
   },[user]);
+
   useEffect(()=>{
     const el=navRef.current;if(!el)return;
     const h=e=>{
@@ -1620,7 +1831,7 @@ function App(){
   ];
 
   if(!user)return <><style>{css}</style><Login onLogin={doLogin}/></>;
-  if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={doLogout}/></>;
+  if(user.role==="viewer")return <><style>{css}</style><ToastStack toasts={toasts}/><ViewerApp user={user} onLogout={doLogout}/></>;
 
   const color=C.blue;
 
@@ -1639,7 +1850,7 @@ function App(){
 
   return <>
     <style>{css}</style>
-    <Toast {...toast}/>
+    <ToastStack toasts={toasts}/>
     {/* Desktop sidebar */}
     <div className="sb">
       <div style={{padding:"20px 16px",display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${C.border}`,marginBottom:8}}>
@@ -1652,7 +1863,7 @@ function App(){
         </button>)}
       </div>
       <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:7}}>
-        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/></div>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><BaghdadClock/><RefreshDot/><RTDot/><OfflineBadge/><PWAInstall/></div>
         <Badge color={color} small>🔑 {user.displayName||user.username}</Badge>
         <button onClick={doLogout} style={{background:`${C.red}15`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:8,padding:"8px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",width:"100%"}}>🚪 خروج</button>
       </div>
@@ -1663,7 +1874,7 @@ function App(){
         <div style={{padding:"9px 15px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{display:"flex",alignItems:"center",gap:7}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:13}}>Space Link</span></div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/>
+            <BaghdadClock/><RefreshDot/><RTDot/><OfflineBadge/><PWAInstall/>
             <Badge color={color} small>🔑 {user.displayName||user.username}</Badge>
             <button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button>
           </div>
