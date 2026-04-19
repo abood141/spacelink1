@@ -194,18 +194,21 @@ const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 const HDR={apikey:SB_KEY,Authorization:`Bearer ${SB_KEY}`,"Content-Type":"application/json"};
 
 // ── Supabase ─────────────────────────────────────────
-async function sbFetch(url,opts,tries=3){
+async function sbFetch(url,opts,tries=4){
   for(let i=0;i<tries;i++){
     try{
+      // First try: 10s, second: 15s, third+: 20s (Supabase cold start can take ~10s)
+      const timeout=i===0?10000:i===1?15000:20000;
       const r=await Promise.race([
         fetch(url,opts),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),i===0?8000:12000))
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),timeout))
       ]);
       if(!r.ok)throw new Error(await r.text());
       return r.json();
     }catch(e){
       if(i===tries-1)throw e;
-      await new Promise(r=>setTimeout(r,1000*(i+1)));
+      // Wait 2s, 3s, 4s between retries
+      await new Promise(r=>setTimeout(r,2000*(i+1)));
     }
   }
 }
@@ -258,10 +261,10 @@ const SQ={
 window.addEventListener('online',()=>{SQ.flush();});
 
 // ── DB Layer ─────────────────────────────────────────
-const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image,stock:r.stock||0}:null;
+const mi=r=>r?{id:r.id,name:r.name,unit:r.unit,threshold:r.threshold,category:r.category,image:r.image}:null;
 const mt=r=>r?{id:r.id,name:r.name,phone:r.phone,createdAt:r.created_at}:null;
 const mtu=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,techId:r.tech_id,createdAt:r.created_at}:null;
-
+const mv=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,displayName:r.display_name,createdAt:r.created_at}:null;
 const mr=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,notes:r.notes,adminId:r.admin_id,createdAt:r.created_at}:null;
 const me=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,subscriberName:r.subscriber_name,subscriberUser:r.subscriber_user,notes:r.notes,workImage:r.work_image,location:r.location,groupId:r.group_id,createdAt:r.created_at}:null;
 
@@ -269,9 +272,8 @@ const DB={
   items:{
     async all(){const c=LC.get('items');if(c)return c;const d=(await sb.q('items','order=id.asc')).map(mi);LC.set('items',d);return d;},
     async find(id){return(await DB.items.all()).find(i=>i.id===+id)||null;},
-    async add(item){const r=await sb.ins('items',{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,stock:item.stock||0,created_at:now()});LC.del('items');return mi(r);},
-    async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,stock:item.stock||0});LC.del('items');},
-    async updStock(id,stock){await sb.upd('items',`id=eq.${id}`,{stock});LC.del('items');},
+    async add(item){const r=await sb.ins('items',{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null,created_at:now()});LC.del('items');return mi(r);},
+    async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:item.unit,threshold:item.threshold,category:item.category,image:item.image||null});LC.del('items');},
     async del(id){await sb.del('items',`id=eq.${id}`);LC.del('items');},
   },
   techs:{
@@ -288,7 +290,13 @@ const DB={
     async add(tid,u,p){const r=await sb.ins('tech_users',{tech_id:tid,username:u,password_hash:hashPw(p),created_at:now()});LC.del('techUsers');return mtu(r);},
     async changePw(id,p){await sb.upd('tech_users',`id=eq.${id}`,{password_hash:hashPw(p)});LC.del('techUsers');},
   },
-
+  viewers:{
+    async all(){const c=LC.get('viewers');if(c)return c;const d=(await sb.q('viewers','order=id.asc')).map(mv);LC.set('viewers',d);return d;},
+    async login(u,p){return(await DB.viewers.all()).find(v=>v.username===u&&v.passwordHash===hashPw(p))||null;},
+    async exists(u){return!!(await DB.viewers.all()).find(v=>v.username===u);},
+    async add(u,p,dn){const r=await sb.ins('viewers',{username:u,password_hash:hashPw(p),display_name:dn||u,created_at:now()});LC.del('viewers');return mv(r);},
+    async del(id){await sb.del('viewers',`id=eq.${id}`);LC.del('viewers');},
+  },
   admins:{
     async all(){try{return(await sb.q('admin_user','order=id.asc')).map(r=>({id:r.id,username:r.username,displayName:r.display_name,createdAt:r.created_at}));}catch{return[];}},
     async login(u,p){
@@ -311,8 +319,6 @@ const DB={
   expenses:{
     async all(){const c=LC.get('expenses');if(c)return c;const d=(await sb.q('expenses','order=id.asc')).map(me);LC.set('expenses',d);return d;},
     async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,location:e.location||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
-    async upd(id,d){await sb.upd('expenses',`id=eq.${id}`,d);LC.del('expenses');},
-    async del(id){await sb.del('expenses',`id=eq.${id}`);LC.del('expenses');},
   },
   archive:{
     async all(){try{const c=LC.get('archive');if(c)return c;const d=await sb.q('operations_archive','order=archived_date.desc');LC.set('archive',d);return d;}catch{return[];}},
@@ -436,45 +442,34 @@ function buildReportData(gs){
 }
 
 // ── Design ────────────────────────────────────────────
-const C={bg:"#07090F",bg2:"#0D1220",bg3:"#121A2E",bg4:"#1A2440",blue:"#4F8EF7",blueD:"#2563EB",green:"#10D9A0",greenD:"#059669",red:"#F75D5D",amber:"#F5A623",purple:"#A78BFA",cyan:"#22D3EE",text:"#E8EFF8",muted:"#5A6A85",border:"#1E2D45",card:"rgba(13,18,32,.65)",glow:"rgba(79,142,247,.08)",chart:["#4F8EF7","#10D9A0","#F5A623","#A78BFA","#F75D5D","#22D3EE"]};
+const C={bg:"#07090F",bg2:"#0D1220",bg3:"#121A2E",bg4:"#1A2440",blue:"#4F8EF7",blueD:"#2563EB",green:"#10D9A0",greenD:"#059669",red:"#F75D5D",amber:"#F5A623",purple:"#A78BFA",cyan:"#22D3EE",text:"#E8EFF8",muted:"#5A6A85",border:"#1E2D45",chart:["#4F8EF7","#10D9A0","#F5A623","#A78BFA","#F75D5D","#22D3EE"]};
 const css=`@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}html,body{font-family:'Tajawal',Tahoma,sans-serif;background:${C.bg};color:${C.text};min-height:100vh;overflow-x:hidden}
-input,select,textarea,button{font-family:inherit;transition:border-color .2s,box-shadow .2s}
-input:focus,select:focus,textarea:focus{border-color:${C.blue}!important;box-shadow:0 0 0 3px ${C.blue}18!important;outline:none}
-::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:#3A5080;border-radius:6px}::-webkit-scrollbar-thumb:hover{background:#4F8EF7}::-webkit-scrollbar-track{background:transparent}
+input,select,textarea,button{font-family:inherit}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#3A5080;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#4F8EF7}::-webkit-scrollbar-track{background:${C.bg2}}
 .hnav{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;scroll-behavior:smooth}
 .hnav::-webkit-scrollbar{display:none}
-@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideUp{from{opacity:0;transform:translateY(50px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes shimmer{0%{background-position:-300px 0}100%{background-position:300px 0}}
-@keyframes glowPulse{0%,100%{box-shadow:0 0 8px rgba(79,142,247,.15)}50%{box-shadow:0 0 20px rgba(79,142,247,.3)}}
-@keyframes scaleIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
-.page{animation:fadeUp .35s cubic-bezier(.22,.68,0,1)}
-.modal-sheet{animation:slideUp .28s cubic-bezier(.32,1.1,.64,1)}
-.glass{background:rgba(13,18,32,.75)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
-.card-hover{transition:transform .2s,box-shadow .25s,border-color .25s}
-.card-hover:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.25);border-color:${C.blue}40!important}
-.sb{display:none;flex-direction:column;width:240px;position:fixed;top:0;bottom:0;right:0;background:rgba(13,18,32,.92);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-left:1px solid ${C.border};z-index:400;overflow-y:auto}
-.sb-item{display:flex;align-items:center;gap:10px;padding:13px 20px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-size:13px;font-weight:500;width:100%;text-align:right;font-family:inherit;border-right:3px solid transparent;transition:all .2s cubic-bezier(.22,.68,0,1)}
-.sb-item:hover{color:${C.text};background:rgba(79,142,247,.08);padding-right:24px}
+.page{animation:fadeUp .25s ease}
+.modal-sheet{animation:slideUp .2s cubic-bezier(.32,1.1,.64,1)}
+.sb{display:none;flex-direction:column;width:230px;position:fixed;top:0;bottom:0;right:0;background:${C.bg2};border-left:1px solid ${C.border};z-index:400;overflow-y:auto}
+.sb-item{display:flex;align-items:center;gap:10px;padding:12px 20px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-size:13px;font-weight:500;width:100%;text-align:right;font-family:inherit;border-right:3px solid transparent;transition:all .15s}
+.sb-item:hover{color:${C.text};background:rgba(79,142,247,.08)}
 .sb-item.ac{color:${C.blue};background:rgba(79,142,247,.12);border-right-color:${C.blue}}
 .app-wrap{min-height:100vh}
-.stat-card{animation:scaleIn .4s cubic-bezier(.22,.68,0,1) both}
-.stat-card:nth-child(2){animation-delay:.05s}.stat-card:nth-child(3){animation-delay:.1s}.stat-card:nth-child(4){animation-delay:.15s}.stat-card:nth-child(5){animation-delay:.2s}
-@media(min-width:1024px){.sb{display:flex}.app-wrap{margin-right:240px}.bnav,.mob-hdr{display:none!important}}`;
+@media(min-width:1024px){.sb{display:flex}.app-wrap{margin-right:230px}.bnav,.mob-hdr{display:none!important}}`;
 
 // ── Primitives ────────────────────────────────────────
 const Dot=({c,pulse:p})=><span style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:c,boxShadow:`0 0 6px ${c}`,animation:p?"pulse 2s ease infinite":"none",flexShrink:0}}/>;
 const Spin=({c=C.blue,s=18})=><div style={{width:s,height:s,border:`2px solid ${c}30`,borderTop:`2px solid ${c}`,borderRadius:"50%",animation:"spin .7s linear infinite"}}/>;
-const Card=({children,style,onClick,glow,hover})=><div onClick={onClick} className={hover?"card-hover":""} style={{background:C.bg2,border:`1px solid ${glow?glow+"40":C.border}`,borderRadius:16,overflow:"hidden",boxShadow:glow?`0 0 20px ${glow}15,0 4px 16px rgba(0,0,0,.2)`:"0 2px 8px rgba(0,0,0,.15)",...style,cursor:onClick?"pointer":"default",transition:"transform .2s,box-shadow .25s,border-color .25s"}}>{children}</div>;
+const Card=({children,style,onClick,glow})=><div onClick={onClick} style={{background:C.bg2,border:`1px solid ${glow?glow+"40":C.border}`,borderRadius:16,overflow:"hidden",boxShadow:glow?`0 0 20px ${glow}15`:"none",...style,cursor:onClick?"pointer":"default"}}>{children}</div>;
 const Btn=({children,onClick,color=C.blue,size="md",full,disabled,outline,icon,loading,style:sx})=>{
   const sz={sm:{p:"6px 14px",fs:12,r:8},md:{p:"10px 18px",fs:14,r:10},lg:{p:"14px 26px",fs:16,r:12}}[size];
-  return <button onClick={onClick} disabled={disabled||loading} style={{background:disabled||loading?C.bg4:outline?"transparent":`linear-gradient(135deg,${color},${color}cc)`,color:disabled||loading?C.muted:outline?color:"#fff",border:outline?`1.5px solid ${color}`:"none",borderRadius:sz.r,padding:sz.p,fontSize:sz.fs,fontWeight:700,cursor:disabled||loading?"not-allowed":"pointer",width:full?"100%":"auto",transition:"all .2s cubic-bezier(.22,.68,0,1)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,boxShadow:disabled||loading||outline?"none":`0 2px 10px ${color}30`,...sx}}
-    onMouseEnter={e=>{if(!disabled&&!loading)e.currentTarget.style.transform='translateY(-1px)';}}
-    onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';}}>
+  return <button onClick={onClick} disabled={disabled||loading} style={{background:disabled||loading?C.bg4:outline?"transparent":color,color:disabled||loading?C.muted:outline?color:"#fff",border:outline?`1.5px solid ${color}`:"none",borderRadius:sz.r,padding:sz.p,fontSize:sz.fs,fontWeight:700,cursor:disabled||loading?"not-allowed":"pointer",width:full?"100%":"auto",transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:6,...sx}}>
     {loading?<Spin c={outline?color:"#fff"} s={14}/>:<>{icon&&<span>{icon}</span>}{children}</>}
   </button>;
 };
@@ -501,12 +496,12 @@ const QtyPick=({value,onChange,max=9999})=>(
 const Modal=({open,onClose,title,children})=>{
   useEffect(()=>{document.body.classList.toggle('modal-open',!!open);return()=>document.body.classList.remove('modal-open');},[open]);
   if(!open)return null;
-  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",zIndex:5000,display:"flex",alignItems:"flex-end",justifyContent:"center",animation:"fadeIn .2s ease"}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} className="modal-sheet" style={{background:C.bg2,borderRadius:"22px 22px 0 0",width:"100%",maxWidth:"var(--mw,520px)",maxHeight:"88vh",overflowY:"auto",padding:"20px 18px 40px",border:`1px solid ${C.border}`,borderBottom:"none",zIndex:5001,boxShadow:"0 -8px 40px rgba(0,0,0,.4)"}}>
-      <div style={{width:40,height:4,background:C.border,borderRadius:3,margin:"0 auto 18px"}}/>
-      {title&&<div style={{fontWeight:800,fontSize:17,marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:5000,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} className="modal-sheet" style={{background:C.bg2,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:"var(--mw,520px)",maxHeight:"88vh",overflowY:"auto",padding:"20px 18px 40px",border:`1px solid ${C.border}`,borderBottom:"none",zIndex:5001}}>
+      <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:"0 auto 18px"}}/>
+      {title&&<div style={{fontWeight:800,fontSize:16,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span>{title}</span>
-        <button onClick={onClose} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.muted,borderRadius:10,width:32,height:32,cursor:"pointer",fontSize:16,transition:"all .15s"}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.muted}>✕</button>
+        <button onClick={onClose} style={{background:C.bg3,border:"none",color:C.muted,borderRadius:8,width:30,height:30,cursor:"pointer",fontSize:16}}>✕</button>
       </div>}
       {children}
     </div>
@@ -515,10 +510,9 @@ const Modal=({open,onClose,title,children})=>{
 const Toast=({msg,type,visible})=>{
   if(!visible)return null;
   const c=type==="error"?C.red:type==="warn"?C.amber:C.green;
-  const ic=type==="error"?"❌":type==="warn"?"⚠️":"✅";
-  return <div style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",background:C.bg2,border:`1px solid ${c}50`,color:c,padding:"10px 22px",borderRadius:14,zIndex:9000,fontWeight:700,fontSize:13,animation:"fadeUp .3s cubic-bezier(.22,.68,0,1)",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center",boxShadow:`0 8px 32px rgba(0,0,0,.35),0 0 0 1px ${c}20`,backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)",display:"flex",alignItems:"center",gap:8}}>{msg}</div>;
+  return <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:C.bg3,border:`1px solid ${c}`,color:c,padding:"9px 20px",borderRadius:12,zIndex:9000,fontWeight:700,fontSize:13,animation:"fadeUp .3s ease",whiteSpace:"nowrap",maxWidth:"92vw",textAlign:"center"}}>{msg}</div>;
 };
-const Badge=({children,color=C.blue,small})=><span style={{background:`${color}18`,color,border:`1px solid ${color}35`,borderRadius:20,padding:small?"3px 9px":"4px 12px",fontSize:small?10:12,fontWeight:700,whiteSpace:"nowrap",letterSpacing:small?0:.3}}>{children}</span>;
+const Badge=({children,color=C.blue,small})=><span style={{background:`${color}22`,color,border:`1px solid ${color}40`,borderRadius:20,padding:small?"2px 8px":"4px 11px",fontSize:small?10:12,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
 const Div=()=><div style={{height:1,background:C.border,margin:"12px 0"}}/>;
 const Skel=()=><div style={{padding:"16px 14px"}}>{[90,70,100,70,90].map((w,i)=><div key={i} style={{height:i%2===0?56:40,background:`linear-gradient(90deg,${C.bg3} 25%,${C.bg4} 50%,${C.bg3} 75%)`,backgroundSize:"400px",borderRadius:10,marginBottom:10,width:w+"%",animation:"shimmer 1.3s ease infinite",animationDelay:i*.08+"s"}}/>)}</div>;
 
@@ -640,22 +634,22 @@ function GroupedRow({group,allItems}){
 function BalRow({b,allItems}){
   const pct=b.received>0?(b.balance/b.received)*100:0;const col=b.balance<=0?C.red:b.balance<=b.threshold?C.amber:C.green;
   const img=allItems?.find(i=>i.id===b.id)?.image;
-  return <div style={{background:C.bg3,borderRadius:14,padding:"12px 14px",marginBottom:8,borderRight:`3px solid ${col}`,transition:"all .2s"}}>
-    <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
-      {img&&<img src={img} style={{width:40,height:40,borderRadius:8,objectFit:"cover",flexShrink:0,boxShadow:"0 2px 8px rgba(0,0,0,.2)"}} alt=""/>}
+  return <div style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
+    <div style={{display:"flex",gap:9,alignItems:"flex-start",marginBottom:7}}>
+      {img&&<img src={img} style={{width:38,height:38,borderRadius:7,objectFit:"cover",flexShrink:0}} alt=""/>}
       <div style={{flex:1}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontWeight:700,fontSize:14}}>{b.name}</span>
-          <span style={{fontWeight:700,color:col,fontSize:15}}>{b.balance} <span style={{fontSize:11,fontWeight:400,color:C.muted}}>{b.unit}</span></span>
+          <span style={{fontWeight:700,color:col}}>{b.balance} {b.unit}</span>
         </div>
-        <div style={{display:"flex",gap:12,fontSize:11,color:C.muted,marginTop:3}}>
-          <span style={{color:C.blue}}>↓ استلم {b.received}</span><span style={{color:C.amber}}>↑ صرف {b.spent}</span>
-          {b.balance>0&&b.balance<=b.threshold&&<Badge color={C.amber} small>⚠ قارب</Badge>}
+        <div style={{display:"flex",gap:10,fontSize:11,color:C.muted,marginTop:2,flexWrap:"wrap"}}>
+          <span style={{color:C.blue}}>↓ {b.received}</span><span style={{color:C.amber}}>↑ {b.spent}</span>
+          {b.balance>0&&b.balance<=b.threshold&&<Badge color={C.amber} small>⚠ قارب النفاذ</Badge>}
           {b.balance<=0&&<Badge color={C.red} small>✕ نفذ</Badge>}
         </div>
       </div>
     </div>
-    <div style={{height:5,background:C.bg4,borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.max(0,Math.min(100,pct))}%`,background:`linear-gradient(90deg,${col},${col}aa)`,borderRadius:3,transition:"width .6s cubic-bezier(.22,.68,0,1)"}}/></div>
+    <div style={{height:4,background:C.bg4,borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.max(0,Math.min(100,pct))}%`,background:col,borderRadius:2,transition:"width .5s"}}/></div>
   </div>;
 }
 
@@ -696,13 +690,21 @@ function BaghdadClock(){
   return <div style={{background:C.bg3,borderRadius:7,padding:"2px 8px",fontSize:12,fontWeight:700,color:C.muted,fontFamily:"monospace",letterSpacing:1}}>{t} بغداد</div>;
 }
 function RefreshDot(){
-  const [st,setSt]=useState(()=>GS._status);const [busy,setBusy]=useState(false);
-  useEffect(()=>{setSt(GS._status);return GS.on(()=>setSt(GS._status));},[]);
+  const [st,setSt]=useState(()=>GS._status);
+  const [waking,setWaking]=useState(()=>!!GS._waking);
+  const [busy,setBusy]=useState(false);
+  useEffect(()=>{
+    setSt(GS._status);setWaking(!!GS._waking);
+    return GS.on(()=>{setSt(GS._status);setWaking(!!GS._waking);});
+  },[]);
   const retry=async()=>{setBusy(true);await GS.forceReload();setBusy(false);};
+  if(waking)return <div style={{background:`${C.amber}20`,border:`1px solid ${C.amber}50`,borderRadius:7,padding:"2px 9px",fontSize:10,color:C.amber,display:"flex",alignItems:"center",gap:4}}>
+    <Spin c={C.amber} s={8}/>جارٍ إيقاظ الخادم...
+  </div>;
   if(st==='error')return <button onClick={retry} disabled={busy} style={{background:`${C.red}25`,border:`1px solid ${C.red}50`,borderRadius:7,padding:"2px 8px",fontSize:10,color:C.red,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
     {busy?<Spin c={C.red} s={8}/>:"⚠️"}{busy?"جارٍ الإيقاظ...":"إعادة اتصال"}
   </button>;
-  if(st==='loading')return <div style={{width:6,height:6,borderRadius:"50%",background:C.cyan,animation:"pulse 1s ease infinite",title:"جارٍ التحديث"}}/>;
+  if(st==='loading')return <div style={{width:6,height:6,borderRadius:"50%",background:C.cyan,animation:"pulse 1s ease infinite"}}/>;
   return null;
 }
 
@@ -718,7 +720,7 @@ function Login({onLogin}){
         if(u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};}
         else{const a=await Promise.race([DB.admins.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!a){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...a,role:"admin"};}
       }else{
-        const tu=await Promise.race([DB.techUsers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!tu){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}const tech=await DB.techs.find(tu.techId);user={...tu,role:"tech",techName:tech?.name||u.trim()};
+        const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!v){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...v,role:"viewer"};
       }
       if(stay)localStorage.setItem("sl_session",JSON.stringify(user));
       else localStorage.removeItem("sl_session");
@@ -729,17 +731,17 @@ function Login({onLogin}){
     }
     setLoading(false);
   };
-  const roles=[["admin","🔑","Admin",C.blue],["tech","🛠","Tech",C.green]];
-  return <div style={{minHeight:"100vh",background:`radial-gradient(ellipse at 50% 0%,${C.blueD}15,${C.bg} 70%)`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
+  const roles=[["admin","🔑","Admin",C.blue],["viewer","👁","Viewer",C.purple]];
+  return <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
     <div style={{width:"100%",maxWidth:360}}>
-      <div style={{textAlign:"center",marginBottom:30}}>
-        <div style={{width:72,height:72,borderRadius:"50%",background:`linear-gradient(135deg,${C.blueD},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,margin:"0 auto 14px",boxShadow:`0 0 40px ${C.blue}35`,animation:"glowPulse 3s ease infinite"}}>🌐</div>
-        <div style={{fontWeight:800,fontSize:24,background:`linear-gradient(135deg,${C.text},${C.blue})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Space Link</div>
-        <div style={{color:C.muted,fontSize:12,marginTop:4}}>نظام إدارة مكتب الإنترنت</div>
+      <div style={{textAlign:"center",marginBottom:28}}>
+        <div style={{width:66,height:66,borderRadius:"50%",background:`linear-gradient(135deg,${C.blueD},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 12px",boxShadow:`0 0 28px ${C.blue}40`}}>🌐</div>
+        <div style={{fontWeight:800,fontSize:22}}>Space Link</div>
+        <div style={{color:C.muted,fontSize:12,marginTop:3}}>نظام إدارة مكتب الإنترنت</div>
       </div>
-      <div style={{display:"flex",gap:5,marginBottom:18,background:C.bg2,borderRadius:14,padding:5,border:`1px solid ${C.border}`}}>
-        {roles.map(([v,ic,l,c])=><button key={v} onClick={()=>{setRole(v);setErr("");setU("");setP("");}} style={{flex:1,padding:"10px 4px",borderRadius:10,border:"none",cursor:"pointer",background:role===v?`${c}18`:"transparent",color:role===v?c:C.muted,fontWeight:role===v?700:400,fontSize:12,display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s",boxShadow:role===v?`0 0 12px ${c}15`:"none"}}>
-          <span style={{fontSize:18}}>{ic}</span><span>{l}</span>
+      <div style={{display:"flex",gap:4,marginBottom:16,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
+        {roles.map(([v,ic,l,c])=><button key={v} onClick={()=>{setRole(v);setErr("");setU("");setP("");}} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",cursor:"pointer",background:role===v?`${c}20`:"transparent",color:role===v?c:C.muted,fontWeight:role===v?700:400,fontSize:12,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+          <span style={{fontSize:17}}>{ic}</span><span>{l}</span>
         </button>)}
       </div>
       <Card style={{padding:20}}>
@@ -752,21 +754,25 @@ function Login({onLogin}){
           </div>
           <span style={{fontSize:12,color:stay?C.text:C.muted}}>ابقَ متصلاً</span>
         </div>
-        <Btn onClick={login} color={roles.find(r=>r[0]===role)?.[3]||C.blue} full size="lg" loading={loading}>دخول ←</Btn>
+        <Btn onClick={login} color={roles.find(r=>r[0]===role)?.[3]||C.blue} full size="lg" loading={loading}>
+          {loading?"⏳ جارٍ الاتصال بالخادم...":"دخول ←"}
+        </Btn>
+        {loading&&<div style={{textAlign:"center",marginTop:8,fontSize:11,color:C.muted,animation:"pulse 1.5s ease infinite"}}>
+          🔄 قد يستغرق إيقاظ الخادم 10-20 ثانية في أول تشغيل...
+        </div>}
       </Card>
       {role!=="admin"&&<div style={{textAlign:"center",color:C.muted,fontSize:11,marginTop:12}}>الحساب يُنشئه الإداري فقط</div>}
     </div>
   </div>;
 }
 
-// ── Admin Dash ────────────────────────────────────────
+
 function AdminDash({user}){
   const gs=useGS(["items","techs","receipts","expenses"]);
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
   const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
   const lowMap=new Map();allBals.filter(b=>b.balance>=0&&b.balance<=b.threshold).forEach(x=>lowMap.set(x.id,x));const low=[...lowMap.values()];
-  const lowStock=I.filter(it=>it.stock<=it.threshold);
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
   const top=Object.values(um).sort((a,b)=>b.total-a.total).slice(0,6);
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
@@ -779,21 +785,13 @@ function AdminDash({user}){
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
   const techSum=T.map(t=>{const b=calcBals(t.id,I,R,E);return{...t,bal:b.reduce((s,x)=>s+x.balance,0),low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length,cnt:b.length};});
   return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{background:`linear-gradient(135deg,${C.blueD}25,${C.bg2})`,border:`1px solid ${C.blue}20`,borderRadius:18,padding:"18px 18px 16px",marginBottom:16}}>
-      <div style={{color:C.muted,fontSize:11,marginBottom:2}}>لوحة التحكم</div>
-      <div style={{fontWeight:800,fontSize:22,background:`linear-gradient(135deg,${C.text},${C.blue})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>مرحباً، {user.displayName||user.username} 👋</div>
-      <div style={{color:C.muted,fontSize:11,marginTop:4}}>📅 {today()}</div>
-    </div>
-    {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}12,${C.red}08)`,border:`1px solid ${C.amber}40`,borderRadius:14,padding:"13px 15px",marginBottom:14,boxShadow:`0 0 20px ${C.amber}08`}}>
-      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}><span style={{fontSize:18}}>⚠️</span><div style={{color:C.amber,fontWeight:700,fontSize:14}}>{low.length} مواد تحت حد التنبيه</div></div>
+    <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div></div>
+    {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}18,${C.red}10)`,border:`1px solid ${C.amber}50`,borderRadius:12,padding:"11px 13px",marginBottom:14}}>
+      <div style={{color:C.amber,fontWeight:700,fontSize:13,marginBottom:5}}>⚠ {low.length} مواد تحت حد التنبيه</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
     </div>}
-    {lowStock.length>0&&<div style={{background:`linear-gradient(135deg,${C.red}12,${C.amber}08)`,border:`1px solid ${C.red}40`,borderRadius:14,padding:"13px 15px",marginBottom:14,boxShadow:`0 0 20px ${C.red}08`}}>
-      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}><span style={{fontSize:18}}>🚨</span><div style={{color:C.red,fontWeight:700,fontSize:14}}>{lowStock.length} مواد مخزون منخفض</div></div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{lowStock.map((a,i)=><Badge key={i} color={a.stock<=0?C.red:C.amber} small>{a.name}: {a.stock} {a.unit}</Badge>)}</div>
-    </div>}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-      {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} className="stat-card" style={{padding:"15px 16px",borderTop:`2px solid ${c}60`}} glow={c}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:26,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:4}}>{l}</div></div><div style={{width:38,height:38,borderRadius:10,background:`${c}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{ic}</div></div></Card>)}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
+      {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 15px"}} glow={c}><div style={{fontSize:20,marginBottom:3}}>{ic}</div><div style={{fontSize:22,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{l}</div></Card>)}
     </div>
     <Card style={{padding:"14px 11px",marginBottom:12}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:10,color:C.muted}}>📊 آخر 7 أيام</div>
@@ -809,36 +807,34 @@ function AdminDash({user}){
         </div>)}</div>
       </div>
     </Card>}
-    <Card style={{padding:"16px 15px",marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}><div style={{fontWeight:700,fontSize:13,color:C.muted}}>👷 ملخص الفنيين</div><Badge color={C.blue} small>{techSum.length} فني</Badge></div>
+    <Card style={{padding:"14px 13px",marginBottom:12}}>
+      <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>👷 ملخص الفنيين</div>
       {techSum.length===0?<div style={{color:C.muted,fontSize:13,textAlign:"center",padding:14}}>لا يوجد فنيين</div>
       :techSum.map(t=>{
+        // Check last activity
         const lastExp=E.filter(e=>e.techId===t.id).reduce((m,e)=>e.createdAt>m?e.createdAt:m,"");
         const daysSince=lastExp?Math.floor((Date.now()-new Date(lastExp.replace(/[\/]/g,"-")))/86400000):-1;
         const inactive=daysSince>1;
-        const col=t.bal>0?C.green:t.bal===0?C.amber:C.red;
-        return <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",marginBottom:6,background:C.bg3,borderRadius:12,borderRight:`3px solid ${col}`,transition:"all .2s"}}>
+        return <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
           <div>
-            <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{fontWeight:700,fontSize:14}}>{t.name}</div>{inactive&&daysSince>=0&&<Badge color={C.red} small>😴 {daysSince} يوم</Badge>}</div>
-            <div style={{color:C.muted,fontSize:11,marginTop:2}}>{t.cnt} نوع · {lastExp?`آخر: ${lastExp.slice(0,10)}`:"لا يوجد نشاط"}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}><div style={{fontWeight:700}}>{t.name}</div>{inactive&&daysSince>=0&&<Badge color={C.red} small>😴 {daysSince} يوم بدون نشاط</Badge>}</div>
+            <div style={{color:C.muted,fontSize:11}}>{t.cnt} نوع · {lastExp?`آخر نشاط: ${lastExp.slice(0,10)}`:"لا يوجد نشاط"}</div>
           </div>
-          <div style={{textAlign:"left",display:"flex",alignItems:"center",gap:7}}>
-            {t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}
-            <div style={{background:`${col}15`,borderRadius:8,padding:"5px 10px"}}><div style={{color:col,fontWeight:700,fontSize:14}}>{t.bal}</div><div style={{color:C.muted,fontSize:9}}>وحدة</div></div>
-          </div>
+          <div style={{textAlign:"right"}}><div style={{color:t.bal>0?C.green:C.red,fontWeight:700}}>{t.bal} وحدة</div>{t.low>0&&<Badge color={C.amber} small>⚠ {t.low}</Badge>}</div>
         </div>;
       })}
     </Card>
-    <Card style={{padding:"16px 15px"}}>
-      <div style={{fontWeight:700,fontSize:13,marginBottom:11,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
+    {/* Daily summary */}
+    <Card style={{padding:"14px 13px"}}>
+      <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
       {(()=>{
         const subs=[...new Set(todayE.map(e=>e.subscriberName).filter(Boolean))];
         return <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
-            {[["📦",todayR.length,C.green,"تسليم"],["📤",todayE.length,C.amber,"صرفية"],["👥",subs.length,C.cyan,"مشترك"]].map(([ic,v,c,l])=><div key={l} style={{background:`${c}10`,borderRadius:10,padding:"10px",textAlign:"center",border:`1px solid ${c}20`}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:20}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:9}}>
+            {[["📦",todayR.length,C.green,"تسليم"],["📤",todayE.length,C.amber,"صرفية"],["👥",subs.length,C.cyan,"مشترك"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:18}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
           </div>
           {subs.length>0&&<div style={{fontSize:11,color:C.muted}}>المشتركين: {subs.join(" · ")}</div>}
-          {todayR.length===0&&todayE.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center",padding:8}}>لا توجد عمليات اليوم بعد</div>}
+          {todayR.length===0&&todayE.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center"}}>لا توجد عمليات اليوم بعد</div>}
         </div>;
       })()}
     </Card>
@@ -958,67 +954,70 @@ function BarcodeScanner({onResult,onClose}){
 
 function AdminItems({user,toast}){
   const gs=useGS(["items"]);
-  const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
+  const [modal,setModal]=useState(null);const [editing,setEditing]=useState(null);const [form,setForm]=useState({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});const [search,setSearch]=useState("");const [saving,setSaving]=useState(false);
   const items=gs.items||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
-  const lowStock=items.filter(it=>it.stock<=it.threshold);
   const save=async()=>{
     if(!form.name.trim()){toast("أدخل الاسم","error");return;}setSaving(true);
-    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",category:form.category,threshold:parseInt(form.threshold)||3,stock:parseInt(form.stock)||0,image:form.image};
+    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",category:form.category,threshold:parseInt(form.threshold)||3,image:form.image};
       if(editing){await DB.items.upd({...editing,...it});await DB.audit.add(user.displayName,"تعديل معدة",form.name);toast("✅ تم التحديث");}
       else{if(items.find(i=>i.name===it.name)){toast("المعدة موجودة","error");setSaving(false);return;}await DB.items.add(it);await DB.audit.add(user.displayName,"إضافة معدة",form.name);toast("✅ تمت الإضافة");}
-      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});}
+      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});}
     catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
   };
   const filtered=items.filter(it=>it.name.includes(search)||it.category?.includes(search));
   if(!gs.items)return <Skel/>;
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-      <div style={{fontWeight:800,fontSize:18}}>🔧 المعدات <Badge color={C.muted} small>{items.length}</Badge></div>
+      <div style={{fontWeight:800,fontSize:18}}>🔧 المعدات</div>
       <div style={{display:"flex",gap:5}}>
-        <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">شراء</Btn>
-        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",stock:"0",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
+        <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">طلب شراء</Btn>
+        <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
+        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة</Btn>
       </div>
     </div>
-    {lowStock.length>0&&<div style={{background:`${C.red}10`,border:`1px solid ${C.red}35`,borderRadius:14,padding:"12px 14px",marginBottom:12}}>
-      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}><span style={{fontSize:16}}>🚨</span><div style={{color:C.red,fontWeight:700,fontSize:13}}>{lowStock.length} مواد وصلت حد التنبيه</div></div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{lowStock.map((a,i)=><Badge key={i} color={a.stock<=0?C.red:C.amber} small>{a.name}: {a.stock} {a.unit}</Badge>)}</div>
-    </div>}
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map(it=>{const isLow=it.stock<=it.threshold;const stockCol=it.stock<=0?C.red:isLow?C.amber:C.green;return <Card key={it.id} style={{padding:0,overflow:"hidden",borderTop:isLow?`2px solid ${stockCol}`:undefined}}>
+      {filtered.map(it=><Card key={it.id} style={{padding:0,overflow:"hidden"}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge></div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,background:`${stockCol}12`,borderRadius:7,padding:"4px 8px"}}>
-            <span style={{fontSize:10,color:C.muted}}>المخزون</span>
-            <span style={{fontWeight:700,fontSize:14,color:stockCol}}>{it.stock} {it.unit}</span>
-          </div>
-          <div style={{color:C.muted,fontSize:10,marginBottom:5}}>⚠ تنبيه عند: {it.threshold}</div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>{it.name}</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge><span style={{color:C.muted,fontSize:11}}>{it.unit}</span></div>
+          <div style={{color:C.muted,fontSize:11,marginBottom:7}}>تنبيه: {it.threshold}</div>
           <div style={{display:"flex",gap:4}}>
-            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,category:it.category||"شبكة",threshold:String(it.threshold),stock:String(it.stock||0),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
+            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
             <Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${it.name}؟`)){await DB.items.del(it.id);await DB.audit.add(user.displayName,"حذف معدة",it.name);await GS.reload("items");toast("🗑 تم");}}} style={{flex:1,padding:"4px 6px"}}>🗑</Btn>
           </div>
         </div>
-      </Card>;})}
+      </Card>)}
     </div>
-    <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 طلبات الشراء">
-      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو تحت حد التنبيه</div>
-      {lowStock.length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
-      {lowStock.map((it,i)=>{const col=it.stock<=0?C.red:C.amber;return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
-        <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>متوفر: <span style={{color:col,fontWeight:700}}>{it.stock}</span> / حد: {it.threshold} {it.unit}</div></div>
-        <Badge color={col} small>{it.stock<=0?"نفذ":"قارب"}</Badge>
-      </div>;})}
-      <Btn onClick={()=>{let msg="🛒 *طلبات الشراء — Space Link*\n\n";lowStock.forEach(it=>{msg+=`• ${it.name} — متوفر: ${it.stock} / حد: ${it.threshold} ${it.unit}\n`;});msg+="\n📅 "+today();window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال واتساب</Btn>
+    <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 قائمة طلبات الشراء">
+      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو اقتربت من حد التنبيه</div>
+      {items.filter(it=>{
+        const bal=it._bal||0;
+        return bal<=it.threshold;
+      }).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
+      {items.map((it,i)=>{
+        const display=it.name+" (تنبيه: "+it.threshold+" "+it.unit+")";
+        return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>الحد: {it.threshold} {it.unit}</div></div>
+          <Badge color={C.amber} small>يحتاج مراجعة</Badge>
+        </div>;
+      })}
+      <Btn onClick={()=>{
+        let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";
+        items.forEach(it=>{msg+=`• ${it.name} (${it.unit}) — حد التنبيه: ${it.threshold}\n`;});
+        msg+="\n📅 "+today();
+        window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");
+      }} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
     </Modal>
     <Modal open={modal==="scan"} onClose={()=>setModal(null)} title="📷 Barcode Scanner">
       <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
     </Modal>
     <Modal open={modal==="form"} onClose={()=>setModal(null)} title={editing?"✏️ تعديل معدة":"➕ إضافة معدة"}>
       <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة"/><Sel label="الصنف" value={form.category} onChange={v=>setForm({...form,category:v})} options={cats.map(c=>({value:c,label:c}))}/></div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="العدد المتوفر (المخزون)" type="number" value={form.stock} onChange={v=>setForm({...form,stock:v})} placeholder="0"/><Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة"/><Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/></div>
+      <Sel label="الصنف" value={form.category} onChange={v=>setForm({...form,category:v})} options={cats.map(c=>({value:c,label:c}))}/>
       <ImgPick label="(اختياري) صورة" value={form.image} onChange={v=>setForm({...form,image:v})}/>
       <Btn onClick={save} color={C.green} full loading={saving} style={{marginTop:6}}>{editing?"تحديث ✓":"إضافة ✓"}</Btn>
     </Modal>
@@ -1142,9 +1141,9 @@ function AdminReceipt({user,toast}){
 }
 
 // ── Admin History ─────────────────────────────────────
-function SubscriberHistory({expenses,techs,items,toast,onRefresh}){
+function SubscriberHistory({expenses,techs,items}){
   const [search,setSearch]=useState("");const [selected,setSelected]=useState(null);
-  const [editModal,setEditModal]=useState(null);const [editForm,setEditForm]=useState({qty:1,notes:"",subName:"",subUser:""});const [saving,setSaving]=useState(false);
+  // Get unique subscribers
   const subs=[...new Map(expenses.filter(e=>e.subscriberName).map(e=>[e.subscriberName,{name:e.subscriberName,user:e.subscriberUser||"",visits:0,lastVisit:"",totalItems:0}])).values()];
   subs.forEach(s=>{
     const visits=expenses.filter(e=>e.subscriberName===s.name);
@@ -1156,68 +1155,22 @@ function SubscriberHistory({expenses,techs,items,toast,onRefresh}){
   subs.sort((a,b)=>b.visits-a.visits);
   const filtered=search?subs.filter(s=>s.name.includes(search)||(s.user&&s.user.includes(search))):subs;
 
-  const doDelete=async(exp)=>{
-    const item=items.find(i=>i.id===exp.itemId);const tech=techs.find(t=>t.id===exp.techId);
-    if(!confirm(`حذف صرفية ${exp.quantity} ${item?.unit||""} ${item?.name||""} للمشترك ${exp.subscriberName}؟`))return;
-    await DB.expenses.del(exp.id);
-    await DB.audit.add("admin","حذف صرفية",`${exp.quantity} ${item?.name||""} - ${exp.subscriberName}`);
-    await GS.reload("expenses");if(onRefresh)onRefresh();if(toast)toast("🗑 تم حذف الصرفية");
-  };
-  const doEdit=async()=>{
-    if(!editForm.subName.trim()){if(toast)toast("أدخل اسم المشترك","error");return;}
-    setSaving(true);
-    const updates={quantity:+editForm.qty,subscriber_name:editForm.subName.trim(),subscriber_user:editForm.subUser.trim()||null,notes:editForm.notes||null};
-    await DB.expenses.upd(editModal.id,updates);
-    await DB.audit.add("admin","تعديل صرفية",`${editModal.subscriberName} → ${editForm.subName}`);
-    await GS.reload("expenses");if(onRefresh)onRefresh();
-    setSaving(false);setEditModal(null);
-    if(toast)toast("✅ تم تعديل الصرفية");
-  };
-
   if(selected){
     const visits=expenses.filter(e=>e.subscriberName===selected.name);
+    const groups=groupExpenses(visits.map(e=>({...e,type:"صرفية",techName:techs.find(t=>t.id===e.techId)?.name||"—",itemName:items.find(i=>i.id===e.itemId)?.name||"—",unit:items.find(i=>i.id===e.itemId)?.unit||""})));
     return <div>
       <button onClick={()=>setSelected(null)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:8,padding:"5px 13px",fontSize:12,cursor:"pointer",marginBottom:12,display:"flex",alignItems:"center",gap:5}}>← رجوع</button>
-      <div style={{background:C.bg3,borderRadius:14,padding:"15px 16px",marginBottom:14}}>
-        <div style={{fontWeight:800,fontSize:17,marginBottom:3}}>👤 {selected.name}</div>
-        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:6}}>@{selected.user}</div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:`${c}12`,borderRadius:10,padding:"8px",textAlign:"center",border:`1px solid ${c}20`}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+      <div style={{background:C.bg3,borderRadius:12,padding:"13px 15px",marginBottom:13}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:3}}>👤 {selected.name}</div>
+        {selected.user&&<div style={{color:C.cyan,fontSize:12,marginBottom:5}}>@{selected.user}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7}}>
+          {[["🔧",selected.visits,C.blue,"زيارة"],["📦",selected.totalItems,C.amber,"وحدة"],["👷",selected.techs.length,C.green,"فني"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg4,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:ic?17:14}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:16}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
         </div>
         <div style={{color:C.muted,fontSize:11,marginTop:7}}>آخر زيارة: {selected.lastVisit}</div>
         <div style={{color:C.muted,fontSize:11}}>الفنيين: {selected.techs.join(" · ")}</div>
       </div>
-      <div style={{fontWeight:700,fontSize:13,color:C.muted,marginBottom:9}}>سجل الصرفيات ({visits.length})</div>
-      {visits.sort((a,b)=>b.createdAt>a.createdAt?1:-1).map((exp,i)=>{
-        const item=items.find(x=>x.id===exp.itemId);const tech=techs.find(t=>t.id===exp.techId);
-        return <div key={i} style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}><Badge color={C.amber} small>صرفية</Badge><span style={{fontWeight:700,fontSize:13}}>{tech?.name||"—"}</span></div>
-              <div style={{fontSize:13}}>{item?.name||"—"} — <span style={{color:C.amber,fontWeight:700}}>{exp.quantity} {item?.unit||""}</span></div>
-              {exp.notes&&<div style={{color:C.muted,fontSize:11,marginTop:2}}>📝 {exp.notes}</div>}
-              <div style={{color:C.muted,fontSize:12,marginTop:4}}>🕐 {exp.createdAt}</div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
-              <button onClick={()=>{setEditModal(exp);setEditForm({qty:exp.quantity,notes:exp.notes||"",subName:exp.subscriberName||"",subUser:exp.subscriberUser||""});}} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>✏️ تعديل</button>
-              <button onClick={()=>doDelete(exp)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,padding:"4px 10px",fontSize:11,cursor:"pointer"}}>🗑 حذف</button>
-            </div>
-          </div>
-        </div>;
-      })}
-      <Modal open={!!editModal} onClose={()=>setEditModal(null)} title="✏️ تعديل صرفية">
-        {editModal&&<>
-          <div style={{background:C.bg3,borderRadius:9,padding:"10px 13px",marginBottom:13}}>
-            <div style={{color:C.muted,fontSize:12}}>المادة: <strong style={{color:C.text}}>{items.find(i=>i.id===editModal.itemId)?.name||"—"}</strong></div>
-            <div style={{color:C.muted,fontSize:12}}>الفني: <strong style={{color:C.text}}>{techs.find(t=>t.id===editModal.techId)?.name||"—"}</strong></div>
-          </div>
-          <Inp label="اسم المشترك *" value={editForm.subName} onChange={v=>setEditForm({...editForm,subName:v})} placeholder="العميل"/>
-          <Inp label="يوزر المشترك" value={editForm.subUser} onChange={v=>setEditForm({...editForm,subUser:v})} placeholder="@username"/>
-          <div style={{marginBottom:13}}><div style={{color:C.muted,fontSize:11,marginBottom:5}}>الكمية</div><QtyPick value={+editForm.qty} onChange={v=>setEditForm({...editForm,qty:v})}/></div>
-          <Inp label="ملاحظة" value={editForm.notes} onChange={v=>setEditForm({...editForm,notes:v})} placeholder="اختياري..."/>
-          <Btn onClick={doEdit} color={C.blue} full loading={saving}>حفظ التعديل ✓</Btn>
-        </>}
-      </Modal>
+      <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:8}}>سجل الزيارات ({groups.length})</div>
+      {groups.map((g,i)=><GroupedRow key={i} group={g} allItems={items}/>)}
     </div>;
   }
 
@@ -1225,7 +1178,7 @@ function SubscriberHistory({expenses,techs,items,toast,onRefresh}){
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث باسم المشترك أو اليوزر..."/>
     <div style={{color:C.muted,fontSize:11,marginBottom:9}}>{subs.length} مشترك · {filtered.length} ظاهر</div>
     {filtered.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد نتائج</div>
-    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:12,padding:"12px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"all .2s"}}
+    :filtered.map((s,i)=><div key={i} onClick={()=>setSelected(s)} style={{background:C.bg3,borderRadius:11,padding:"11px 14px",marginBottom:7,cursor:"pointer",border:`1px solid ${C.border}`,transition:"border-color .15s"}}
       onMouseEnter={e=>e.currentTarget.style.borderColor=C.blue}
       onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -1243,7 +1196,7 @@ function SubscriberHistory({expenses,techs,items,toast,onRefresh}){
   </div>;
 }
 
-function AdminHistory({toast}){
+function AdminHistory(){
   const [filter,setFilter]=useState("today");
   const [tab,setTab]=useState("live");
   const [dateFilter,setDateFilter]=useState(today());
@@ -1302,7 +1255,7 @@ function AdminHistory({toast}){
       {filter==="all"&&receipts.length===0&&expGroups.length===0&&<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>}
     </>}
 
-    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I} toast={toast} onRefresh={()=>GS.reload("expenses")}/>}
+    {tab==="subs"&&<SubscriberHistory expenses={E} techs={T} items={I}/>}
 
     {tab==="archive"&&<>
       {archive.length===0
@@ -1375,8 +1328,8 @@ function AdminReports({toast}){
       {[["overview","نظرة عامة"],["techs","الفنيين"],["items","المواد"],["trend","الاتجاه"]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 2px",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:12}}>{l}</button>)}
     </div>
     {tab==="overview"&&<div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-        {[["👷",techs.length,C.blue,"الفنيين"],["🔧",items.length,C.purple,"المعدات"],["📦",receipts.length,C.green,"تسليمات"],["📤",expenses.length,C.amber,"صرفيات"],["📊",totalRemaining||0,C.cyan,"المتبقي"]].map(([ic,v,c,l])=><Card key={l} className="stat-card" style={{padding:"14px 15px",borderTop:`2px solid ${c}60`}} glow={c}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:24,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:3}}>{l}</div></div><div style={{width:34,height:34,borderRadius:9,background:`${c}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{ic}</div></div></Card>)}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}>
+        {[["👷",techs.length,C.blue,"الفنيين"],["🔧",items.length,C.purple,"المعدات"],["📦",receipts.length,C.green,"تسليمات"],["📤",expenses.length,C.amber,"صرفيات"],["📊",totalRemaining||0,C.cyan,"المتبقي"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 14px"}} glow={c}><div style={{fontSize:19}}>{ic}</div><div style={{fontSize:24,color:c,fontWeight:700}}>{v}</div><div style={{color:C.muted,fontSize:11}}>{l}</div></Card>)}
       </div>
       <Card style={{padding:"14px 11px"}}><div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:9}}>آخر 14 يوم</div><LineSVG data={lineData} dataKey="قيمة" color={C.amber} h={130}/></Card>
     </div>}
@@ -1456,7 +1409,37 @@ function AdminAudit(){
   </div>;
 }
 
-
+function AdminViewers({user,toast}){
+  const [viewers,setViewers]=useState(null);const [modal,setModal]=useState(false);const [form,setForm]=useState({username:"",password:"",displayName:""});const [saving,setSaving]=useState(false);
+  const load=()=>DB.viewers.all().then(setViewers);useEffect(()=>{load();},[]);
+  const add=async()=>{
+    if(!form.username.trim()||!form.password.trim()){toast("أكمل الحقول","error");return;}
+    if(await DB.viewers.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}setSaving(true);
+    try{await DB.viewers.add(form.username.trim(),form.password.trim(),form.displayName.trim());await DB.audit.add(user.displayName,"إضافة viewer",form.username);load();setModal(false);setForm({username:"",password:"",displayName:""});toast("✅ تم إنشاء الحساب");}
+    catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
+  };
+  if(!viewers)return <Skel/>;
+  return <div className="page" style={{padding:"16px 14px"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:13}}>
+      <div style={{fontWeight:800,fontSize:18}}>👁 المشاهدين</div>
+      <Btn onClick={()=>setModal(true)} color={C.purple} size="sm" icon="+">إضافة</Btn>
+    </div>
+    <div style={{background:`${C.purple}15`,border:`1px solid ${C.purple}40`,borderRadius:11,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.purple}}>صلاحية المشاهد: عرض فقط بدون تعديل</div>
+    {viewers.length===0?<div style={{color:C.muted,textAlign:"center",padding:40,background:C.bg2,borderRadius:14}}>لا يوجد مشاهدين</div>
+    :viewers.map(v=><Card key={v.id} style={{padding:"11px 15px",marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div><div style={{fontWeight:700}}>{v.displayName||v.username}</div><div style={{color:C.muted,fontSize:12}}>@{v.username}</div></div>
+        <div style={{display:"flex",gap:5}}><Badge color={C.purple} small>👁 viewer</Badge><Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${v.username}؟`)){await DB.viewers.del(v.id);await DB.audit.add(user.displayName,"حذف viewer",v.username);load();toast("🗑 تم");}}}>🗑</Btn></div>
+      </div>
+    </Card>)}
+    <Modal open={modal} onClose={()=>setModal(false)} title="➕ إضافة مشاهد">
+      <Inp label="الاسم (اختياري)" value={form.displayName} onChange={v=>setForm({...form,displayName:v})} placeholder="الاسم الكامل"/>
+      <Inp label="اسم المستخدم *" value={form.username} onChange={v=>setForm({...form,username:v})} placeholder="viewer1"/>
+      <Inp label="كلمة المرور *" type="password" value={form.password} onChange={v=>setForm({...form,password:v})} placeholder="••••••"/>
+      <Btn onClick={add} color={C.purple} full loading={saving} style={{marginTop:4}}>إنشاء الحساب ✓</Btn>
+    </Modal>
+  </div>;
+}
 
 // ── Admin Admins ──────────────────────────────────────
 function AdminAdmins({user,toast}){
@@ -1515,167 +1498,6 @@ function ResetAdminPw({admin,onDone}){
 }
 
 // ── Tech Dash ─────────────────────────────────────────
-function TechDash({user}){
-  const gs=useGS(["items","receipts","expenses"]);
-  const bals=useMemo(()=>gs.items?calcBals(user.techId,gs.items||[],gs.receipts||[],gs.expenses||[]):null,[gs.items,gs.receipts,gs.expenses]);
-  if(!bals)return <Skel/>;
-  const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold);
-  const totalBal=bals.reduce((s,b)=>s+b.balance,0);
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{background:`linear-gradient(135deg,${C.greenD}20,${C.bg2})`,border:`1px solid ${C.green}20`,borderRadius:18,padding:"18px 18px 16px",marginBottom:16}}>
-      <div style={{color:C.muted,fontSize:11}}>مرحباً</div>
-      <div style={{fontWeight:800,fontSize:21,background:`linear-gradient(135deg,${C.text},${C.green})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>{user.techName} 👋</div>
-    </div>
-    {low.length>0&&<div style={{background:`${C.amber}10`,border:`1px solid ${C.amber}35`,borderRadius:14,padding:"13px 15px",marginBottom:14}}>
-      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}><span style={{fontSize:16}}>⚠️</span><div style={{color:C.amber,fontWeight:700,fontSize:13}}>{low.length} قاربت النفاذ</div></div>
-      {low.map((a,i)=><div key={i} style={{color:C.muted,fontSize:12,padding:"2px 0"}}>• {a.name}: <span style={{color:C.amber,fontWeight:600}}>{a.balance} {a.unit}</span></div>)}
-    </div>}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-      <Card className="stat-card" style={{padding:"15px 16px",borderTop:`2px solid ${C.blue}60`}} glow={C.blue}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:26,color:C.blue,fontWeight:700}}>{bals.length}</div><div style={{color:C.muted,fontSize:11,marginTop:3}}>أنواع المواد</div></div><div style={{width:36,height:36,borderRadius:10,background:`${C.blue}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>📦</div></div></Card>
-      <Card className="stat-card" style={{padding:"15px 16px",borderTop:`2px solid ${C.green}60`}} glow={C.green}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:26,color:C.green,fontWeight:700}}>{totalBal}</div><div style={{color:C.muted,fontSize:11,marginTop:3}}>إجمالي الرصيد</div></div><div style={{width:36,height:36,borderRadius:10,background:`${C.green}15`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>✅</div></div></Card>
-    </div>
-    <div style={{fontWeight:700,fontSize:13,color:C.muted,marginBottom:10}}>رصيد موادي</div>
-    {bals.length===0?<Card style={{padding:40,textAlign:"center"}}><div style={{color:C.muted,fontSize:36,marginBottom:8}}>📦</div><div style={{color:C.muted}}>لا يوجد رصيد</div></Card>:bals.map((b,i)=><BalRow key={i} b={b} allItems={gs.items}/>)}
-  </div>;
-}
-
-// ── Tech Expense ──────────────────────────────────────
-function ExpRow({bals,row,onChange,onRemove,canRemove,allItems}){
-  const sel=bals.find(b=>b.id===row.itemId)||bals[0];
-  return <div style={{background:C.bg4,borderRadius:12,padding:"11px 13px",marginBottom:9,border:`1px solid ${C.border}`}}>
-    <div style={{color:C.muted,fontSize:11,marginBottom:5}}>المادة</div>
-    <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:11}}>
-      {bals.map(b=>{const img=allItems?.find(x=>x.id===b.id)?.image;return <div key={b.id} onClick={()=>onChange({...row,itemId:b.id,qty:1})} style={{background:row.itemId===b.id?`${C.blue}22`:C.bg3,border:`1px solid ${row.itemId===b.id?C.blue:C.border}`,borderRadius:9,padding:"8px 11px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{display:"flex",alignItems:"center",gap:7}}>{img&&<img src={img} style={{width:28,height:28,borderRadius:5,objectFit:"cover"}} alt=""/>}<span style={{fontWeight:row.itemId===b.id?700:400,fontSize:13}}>{b.name}</span></div>
-        <span style={{fontWeight:700,fontSize:12,color:b.balance<=b.threshold?C.amber:C.green}}>{b.balance} {b.unit}</span>
-      </div>;})}
-    </div>
-    {sel&&<><div style={{color:C.muted,fontSize:11,marginBottom:5}}>الكمية (متاح: {sel.balance} {sel.unit})</div><QtyPick value={row.qty} onChange={v=>onChange({...row,qty:v})} max={sel.balance}/></>}
-    {canRemove&&<button onClick={onRemove} style={{marginTop:9,background:`${C.red}18`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,padding:"4px 13px",fontSize:12,cursor:"pointer",width:"100%"}}>حذف هذه المادة</button>}
-  </div>;
-}
-function TechExpense({user,toast}){
-  const gs=useGS(["items","receipts","expenses"]);
-  const [subName,setSubName]=useState("");const [subUser,setSubUser]=useState("");const [loc,setLoc]=useState(null);const [notes,setNotes]=useState("");const [img,setImg]=useState(null);const [ok,setOk]=useState("");const [rows,setRows]=useState([]);const [saving,setSaving]=useState(false);
-  const bals=useMemo(()=>gs.items?calcBals(user.techId,gs.items||[],gs.receipts||[],gs.expenses||[]).filter(b=>b.balance>0):[],[gs.items,gs.receipts,gs.expenses]);
-  useEffect(()=>{if(bals.length>0&&rows.length===0)setRows([{itemId:bals[0].id,qty:1}]);},[bals]);
-  const [noItems,setNoItems]=useState(false);
-  const submit=async()=>{
-    if(!subName.trim()){toast("أدخل اسم المشترك","error");return;}
-    if(!noItems&&rows.length===0){toast("أضف مادة أو اختر 'لا يوجد مواد'","error");return;}
-    if(!noItems){for(const row of rows){const b=bals.find(x=>x.id===row.itemId);if(!b){toast("مادة غير موجودة","error");return;}if(row.qty>b.balance){toast(`رصيد غير كافٍ لـ ${b.name}. المتبقي: ${b.balance}${b.unit}`,"error");return;}}}
-    setSaving(true);
-    try{const ts=now();const gid=ts;
-      if(noItems){
-        // No-items maintenance record - use a dummy item_id=0 via notes
-        await DB.audit.add(user.techName,"صرفية","صيانة بدون مواد → "+subName.trim());
-        // Store as expense with itemId=null-like workaround: skip DB insert, just log
-        setOk(`✅ تم تسجيل صيانة بدون مواد للمشترك ${subName} — ${ts}`);
-      } else {
-        for(const row of rows){const b=bals.find(x=>x.id===row.itemId);await DB.expenses.add({techId:user.techId,itemId:row.itemId,quantity:row.qty,location:loc,notes,subscriberName:subName.trim(),subscriberUser:subUser.trim(),workImage:img,createdAt:ts,groupId:gid});await DB.audit.add(user.techName,"صرفية",`${row.qty} ${b.unit} من ${b.name} → ${subName}`);}
-        const sum=rows.map(r=>{const b=bals.find(x=>x.id===r.itemId);return `${r.qty} ${b?.unit||""} ${b?.name||""}`;}).join(" + ");
-        setOk(`✅ تم تسجيل: ${sum} للمشترك ${subName} — ${ts}`);
-      }
-      toast("✅ تم تسجيل الصرفية");
-      setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);setNoItems(false);
-      await GS.reload("expenses");
-    }catch(e){
-      // If offline, queue for later
-      if(!navigator.onLine){
-        if(!noItems){
-          const ts=now();const gid=ts;
-          rows.forEach(row=>{SQ.add({type:'expense',actor:user.techName,data:{techId:user.techId,itemId:row.itemId,quantity:row.qty,location:loc,notes,subscriberName:subName.trim(),subscriberUser:subUser.trim(),workImage:img,createdAt:ts,groupId:gid}});});
-          setOk(`📵 تم الحفظ محلياً — سيُرسل عند عودة الإنترنت`);
-          setSubName("");setSubUser("");setNotes("");setLoc(null);setImg(null);setRows([]);setNoItems(false);
-          toast("📵 محفوظ offline");
-        }
-      } else {toast("خطأ: "+e.message,"error");}
-    }setSaving(false);
-  };
-  if(!gs.items)return <Skel/>;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:13}}>📤 تسجيل صرفية</div>
-    {bals.length===0?<Card style={{padding:40,textAlign:"center"}}><div style={{color:C.muted}}>لا يوجد رصيد في حسابك</div></Card>
-    :<Card style={{padding:15,marginBottom:13}}>
-      <div style={{fontWeight:700,fontSize:12,color:C.muted,marginBottom:9}}>👤 المشترك</div>
-      <Inp label="اسم المشترك *" value={subName} onChange={setSubName} placeholder="العميل"/>
-      <Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="@username"/>
-      <Div/>
-      {/* No-items toggle */}
-      <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11,cursor:"pointer",background:noItems?`${C.amber}15`:`${C.bg3}`,border:`1px solid ${noItems?C.amber:C.border}`,borderRadius:10,padding:"9px 13px"}} onClick={()=>setNoItems(!noItems)}>
-        <div style={{width:20,height:20,borderRadius:6,border:`2px solid ${noItems?C.amber:C.border}`,background:noItems?C.amber:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          {noItems&&<span style={{color:"#fff",fontSize:13,fontWeight:700}}>✓</span>}
-        </div>
-        <div><div style={{fontSize:13,fontWeight:700,color:noItems?C.amber:C.text}}>🔧 لا يوجد مواد مصروفة</div><div style={{fontSize:11,color:C.muted}}>صيانة بدون صرف مواد</div></div>
-      </div>
-      {!noItems&&<>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
-        <div style={{fontWeight:700,fontSize:12,color:C.muted}}>📦 المواد المصروفة</div>
-        <Btn onClick={()=>{const u=rows.map(r=>r.itemId);const f=bals.find(b=>!u.includes(b.id))||bals[0];setRows(r=>[...r,{itemId:f.id,qty:1}]);}} color={C.blue} size="sm" icon="+" disabled={rows.length>=bals.length}>إضافة مادة</Btn>
-      </div>
-      {rows.map((row,idx)=><ExpRow key={idx} bals={bals} row={row} allItems={gs.items} onChange={val=>setRows(r=>r.map((x,i)=>i===idx?val:x))} onRemove={()=>setRows(r=>r.filter((_,i)=>i!==idx))} canRemove={rows.length>1}/>)}
-      </>}
-      <Div/>
-      <GPS onLoc={setLoc}/>
-      <Inp label="ملاحظة" value={notes} onChange={setNotes} placeholder="وصف العمل..."/>
-      <ImgPick label="(اختياري) صورة العمل" value={img} onChange={setImg}/>
-      {ok&&<div style={{background:`${C.green}15`,border:`1px solid ${C.green}40`,borderRadius:9,padding:"8px 13px",color:C.green,fontSize:12,marginBottom:11,lineHeight:1.6}}>{ok}</div>}
-      <Btn onClick={submit} color={C.amber} full size="lg" loading={saving}>Submit — تسجيل الصرفية</Btn>
-    </Card>}
-  </div>;
-}
-
-// ── Tech History ──────────────────────────────────────
-function TechHistory({user}){
-  const [tab,setTab]=useState("exp");
-  const gs=useGS(["items","receipts","expenses"]);
-  if(!gs.items)return <Skel/>;
-  const I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
-  const rawExp=[...E].filter(e=>e.techId===user.techId).reverse().map(e=>({...e,type:"صرفية",techName:user.techName,itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
-  const rec=[...R].filter(r=>r.techId===user.techId).reverse().map(r=>({...r,type:"تسليم",techName:user.techName,itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""}));
-  const expG=groupExpenses(rawExp);
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📋 سجلي</div>
-    <div style={{display:"flex",gap:3,background:C.bg2,borderRadius:12,padding:4,marginBottom:13,border:`1px solid ${C.border}`}}>
-      {[["exp",`صرفياتي (${expG.length})`],["rec",`ما استلمت (${rec.length})`]].map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",background:tab===v?C.bg4:"transparent",color:tab===v?C.text:C.muted,fontWeight:tab===v?700:400,fontSize:13}}>{l}</button>)}
-    </div>
-    {tab==="exp"&&(expG.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:expG.map((g,i)=><GroupedRow key={i} group={g} allItems={I}/>))}
-    {tab==="rec"&&(rec.length===0?<div style={{color:C.muted,textAlign:"center",padding:40}}>لا توجد سجلات</div>:rec.map((op,i)=><OpsRow key={i} op={op}/>))}
-  </div>;
-}
-
-// ── Tech Profile ──────────────────────────────────────
-function TechProfile({user,onLogout,toast}){
-  const gs=useGS(["items","receipts","expenses","techs"]);
-  const [pwM,setPwM]=useState(false);const [pw,setPw]=useState("");const [pw2,setPw2]=useState("");const [saving,setSaving]=useState(false);
-  const bals=useMemo(()=>gs.items?calcBals(user.techId,gs.items||[],gs.receipts||[],gs.expenses||[]):[],[gs.items,gs.receipts,gs.expenses]);
-  const tech=useMemo(()=>(gs.techs||[]).find(t=>t.id===user.techId),[gs.techs]);
-  const expCount=(gs.expenses||[]).filter(e=>e.techId===user.techId).length;
-  return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:13}}>👤 ملفي</div>
-    <Card style={{padding:18,marginBottom:11}}>
-      <div style={{display:"flex",alignItems:"center",gap:13,marginBottom:13}}>
-        <div style={{width:50,height:50,borderRadius:"50%",background:`linear-gradient(135deg,${C.greenD},${C.green})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>🛠</div>
-        <div><div style={{fontWeight:800,fontSize:16}}>{user.techName}</div><div style={{color:C.muted,fontSize:12}}>@{user.username}</div>{tech?.phone&&<div style={{color:C.muted,fontSize:12}}>📱 {tech.phone}</div>}</div>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
-        <div style={{background:C.bg3,borderRadius:9,padding:"9px 11px"}}><div style={{fontSize:19,color:C.blue,fontWeight:700}}>{bals.length}</div><div style={{color:C.muted,fontSize:11}}>أنواع المواد</div></div>
-        <div style={{background:C.bg3,borderRadius:9,padding:"9px 11px"}}><div style={{fontSize:19,color:C.green,fontWeight:700}}>{expCount}</div><div style={{color:C.muted,fontSize:11}}>الصرفيات</div></div>
-      </div>
-    </Card>
-    <div style={{display:"flex",flexDirection:"column",gap:7}}>
-      <Btn onClick={()=>setPwM(true)} color={C.purple} full icon="🔑">تغيير كلمة المرور</Btn>
-      <Btn onClick={onLogout} color={C.red} full outline icon="🚪">تسجيل خروج</Btn>
-    </div>
-    <Modal open={pwM} onClose={()=>setPwM(false)} title="🔑 تغيير كلمة المرور">
-      <Inp label="الجديدة *" type="password" value={pw} onChange={setPw} placeholder="••••••"/>
-      <Inp label="تأكيد *" type="password" value={pw2} onChange={setPw2} placeholder="••••••"/>
-      <Btn loading={saving} onClick={async()=>{if(pw!==pw2){toast("غير متطابقتان","error");return;}if(pw.length<4){toast("قصيرة جداً","error");return;}setSaving(true);await DB.techUsers.changePw(user.id,pw);toast("✅ تم");setPwM(false);setPw("");setPw2("");setSaving(false);}} color={C.purple} full style={{marginTop:6}}>حفظ ✓</Btn>
-    </Modal>
-  </div>;
-}
-
-// ── Viewer ────────────────────────────────────────────
 function ViewerApp({user,onLogout}){
   const [page,setPage]=useState("dash");
   const tabs=[{id:"dash",icon:"📊",label:"نظرة عامة"},{id:"hist",icon:"📋",label:"السجل"},{id:"items",icon:"🔧",label:"المعدات"}];
@@ -1717,30 +1539,29 @@ function App(){
   const doLogin=u=>{setUser(u);setPage("dash");};
   const doLogout=()=>{setUser(null);setPage("dash");localStorage.removeItem("sl_session");GS.inval("items","techs","receipts","expenses");};
 
-  useEffect(()=>{DB.admins.seed();},[]);
+  useEffect(()=>{
+    // Wake up Supabase immediately on page load
+    GS.ping().then(()=>DB.admins.seed());
+    // Keep alive every 4 minutes
+    const keepAlive=setInterval(()=>{
+      fetch(`${SB_URL}/rest/v1/admin_user?limit=1`,{headers:{apikey:SB_KEY}}).catch(()=>{});
+    },4*60*1000);
+    return()=>clearInterval(keepAlive);
+  },[]);
   useEffect(()=>{
     if(user){
       GS.load(["items","techs","receipts","expenses"]).then(gs=>{
-        // Flush offline queue after load
         SQ.flush();
-        // Low stock notification
         if(user.role==="admin"&&gs.items&&gs.receipts&&gs.expenses){
           const lowItems=gs.items.filter(it=>{
             const rec=(gs.receipts||[]).filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
             const sp=(gs.expenses||[]).filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
             return (rec-sp)<=it.threshold;
           });
-          if(lowItems.length>0){
-            setTimeout(()=>showToast(`⚠️ ${lowItems.length} مواد تحت حد التنبيه: ${lowItems.slice(0,2).map(i=>i.name).join("، ")}${lowItems.length>2?"...":""}`, "warn"),1500);
-          }
+          if(lowItems.length>0)setTimeout(()=>showToast(`⚠️ ${lowItems.length} مواد تحت حد التنبيه: ${lowItems.slice(0,2).map(i=>i.name).join("، ")}${lowItems.length>2?"...":""}`, "warn"),1500);
         }
       });
-      if(user.role==="tech"&&navigator.geolocation){
-        navigator.geolocation.watchPosition(p=>{localStorage.setItem("sl_loc_"+user.techId,JSON.stringify({lat:p.coords.latitude.toFixed(6),lng:p.coords.longitude.toFixed(6)}));},()=>{},{enableHighAccuracy:true,maximumAge:15000});
-      }
-      const retryTimer=setInterval(()=>{
-        if(GS._status==='error')GS.forceReload();
-      },30000);
+      const retryTimer=setInterval(()=>{if(GS._status==='error')GS.forceReload();},30000);
       return()=>clearInterval(retryTimer);
     }
   },[user]);
@@ -1748,75 +1569,85 @@ function App(){
     const el=navRef.current;if(!el)return;
     const h=e=>{
       const mw=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mw'))||500;
-      const left=(window.innerWidth-mw)/2;
-      const right=left+mw;
-      const isOutside=e.clientX<left||e.clientX>right;
-      const isNav=el.contains(e.target);
+      const left=(window.innerWidth-mw)/2;const right=left+mw;
+      const isOutside=e.clientX<left||e.clientX>right;const isNav=el.contains(e.target);
       if((isOutside||isNav)&&Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();el.scrollLeft+=e.deltaY;}
     };
     document.addEventListener('wheel',h,{passive:false});
     return()=>document.removeEventListener('wheel',h);
   });
 
-  const adminTabs=[{id:"dash",icon:"📊",label:"Dashboard"},{id:"techs",icon:"👷",label:"الفنيين"},{id:"items",icon:"🔧",label:"المعدات"},{id:"receipt",icon:"📦",label:"تسليم"},{id:"history",icon:"📋",label:"السجل"},{id:"reports",icon:"📈",label:"تقارير"},{id:"audit",icon:"🔍",label:"تدقيق"},{id:"admins",icon:"🔑",label:"Admins"}];
-  const techTabs=[{id:"dash",icon:"📦",label:"رصيدي"},{id:"expense",icon:"📤",label:"صرفية"},{id:"history",icon:"📋",label:"سجلي"},{id:"profile",icon:"👤",label:"ملفي"}];
+  const adminTabs=[
+    {id:"dash",icon:"📊",label:"Dashboard"},
+    {id:"techs",icon:"👷",label:"الفنيين"},
+    {id:"items",icon:"🔧",label:"المعدات"},
+    {id:"receipt",icon:"📦",label:"تسليم"},
+    {id:"history",icon:"📋",label:"السجل"},
+    {id:"reports",icon:"📈",label:"تقارير"},
+    {id:"audit",icon:"🔍",label:"تدقيق"},
+    {id:"viewers",icon:"👁",label:"Viewers"},
+    {id:"admins",icon:"🔑",label:"Admins"},
+  ];
 
   if(!user)return <><style>{css}</style><Login onLogin={doLogin}/></>;
+  if(user.role==="viewer")return <><style>{css}</style><Toast {...toast}/><ViewerApp user={user} onLogout={doLogout}/></>;
 
-  const isAdmin=user.role==="admin";const tabs=isAdmin?adminTabs:techTabs;const color=isAdmin?C.blue:C.green;
+  const color=C.blue;
 
-  const renderPage=()=>{
-    if(isAdmin)switch(page){
-      case"dash":return<AdminDash user={user}/>;case"techs":return<AdminTechs user={user} toast={showToast}/>;case"items":return<AdminItems user={user} toast={showToast}/>;case"receipt":return<AdminReceipt user={user} toast={showToast}/>;case"history":return<AdminHistory toast={showToast}/>;case"reports":return<AdminReports toast={showToast}/>;case"audit":return<AdminAudit/>;case"admins":return<AdminAdmins user={user} toast={showToast}/>;default:return<AdminDash user={user}/>;
-    }
-    switch(page){case"dash":return<TechDash user={user}/>;case"expense":return<TechExpense user={user} toast={showToast}/>;case"history":return<TechHistory user={user}/>;case"profile":return<TechProfile user={user} onLogout={doLogout} toast={showToast}/>;default:return<TechDash user={user}/>;}
-  };
+  const renderPage=()=>{switch(page){
+    case"dash":return<AdminDash user={user}/>;
+    case"techs":return<AdminTechs user={user} toast={showToast}/>;
+    case"items":return<AdminItems user={user} toast={showToast}/>;
+    case"receipt":return<AdminReceipt user={user} toast={showToast}/>;
+    case"history":return<AdminHistory/>;
+    case"reports":return<AdminReports toast={showToast}/>;
+    case"audit":return<AdminAudit/>;
+    case"viewers":return<AdminViewers user={user} toast={showToast}/>;
+    case"admins":return<AdminAdmins user={user} toast={showToast}/>;
+    default:return<AdminDash user={user}/>;
+  }};
 
   return <>
     <style>{css}</style>
     <Toast {...toast}/>
+    {/* Desktop sidebar */}
     <div className="sb">
       <div style={{padding:"20px 16px",display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${C.border}`,marginBottom:8}}>
         <div style={{width:38,height:38,borderRadius:"50%",background:`linear-gradient(135deg,${C.blueD},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>🌐</div>
         <div><div style={{fontWeight:800,fontSize:15}}>Space Link</div><div style={{color:C.muted,fontSize:10}}>نظام إدارة مكتب الإنترنت</div></div>
       </div>
       <div style={{flex:1,overflowY:"auto"}}>
-        {tabs.map(t=><button key={t.id} className={`sb-item${page===t.id?" ac":""}`} onClick={()=>setPage(t.id)}>
+        {adminTabs.map(t=><button key={t.id} className={`sb-item${page===t.id?" ac":""}`} onClick={()=>setPage(t.id)}>
           <span style={{fontSize:17}}>{t.icon}</span><span>{t.label}</span>
         </button>)}
       </div>
       <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:7}}>
         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/></div>
-        <Badge color={color} small>{isAdmin?"🔑 "+(user.displayName||user.username):"🛠 "+user.techName}</Badge>
+        <Badge color={color} small>🔑 {user.displayName||user.username}</Badge>
         <button onClick={doLogout} style={{background:`${C.red}15`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:8,padding:"8px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"inherit",width:"100%"}}>🚪 خروج</button>
       </div>
     </div>
+    {/* Main content */}
     <div className="app-wrap">
-      <div className="mob-hdr" style={{position:"sticky",top:0,zIndex:300,background:"rgba(13,18,32,.92)",backdropFilter:"blur(16px)",WebkitBackdropFilter:"blur(16px)",borderBottom:`1px solid ${C.border}`}}>
+      <div className="mob-hdr" style={{position:"sticky",top:0,zIndex:300,background:C.bg2,borderBottom:`1px solid ${C.border}`}}>
         <div style={{padding:"9px 15px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{display:"flex",alignItems:"center",gap:7}}><Dot c={color} pulse/><span style={{fontWeight:700,fontSize:13}}>Space Link</span></div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             <BaghdadClock/><RefreshDot/><OfflineBadge/><PWAInstall/>
-            <Badge color={color} small>{isAdmin?"🔑 "+(user.displayName||user.username):"🛠 "+user.techName}</Badge>
+            <Badge color={color} small>🔑 {user.displayName||user.username}</Badge>
             <button onClick={doLogout} style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>خروج</button>
           </div>
         </div>
       </div>
       <div style={{paddingBottom:80}}>{renderPage()}</div>
     </div>
-    <nav className="bnav" style={{position:"fixed",bottom:0,left:0,width:"100%",background:"rgba(13,18,32,.92)",backdropFilter:"blur(16px)",WebkitBackdropFilter:"blur(16px)",borderTop:`1px solid ${C.border}`,zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)",boxShadow:"0 -4px 20px rgba(0,0,0,.3)"}}>
-      {isAdmin
-        ?<div ref={navRef} className="hnav">
-          {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:62,padding:"10px 6px 8px",background:page===t.id?`${color}10`:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`,transition:"all .2s"}}>
-            <span style={{fontSize:18}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
-          </button>)}
-        </div>
-        :<div style={{display:"flex"}}>
-          {techTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flex:1,padding:"10px 4px 8px",background:page===t.id?`${color}10`:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:3,cursor:"pointer",transition:"all .2s"}}>
-            <span style={{fontSize:19}}>{t.icon}</span><span style={{fontSize:10,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400}}>{t.label}</span>
-            {page===t.id&&<div style={{width:16,height:2.5,borderRadius:2,background:color,boxShadow:`0 0 8px ${color}`}}/>}
-          </button>)}
-        </div>}
+    {/* Mobile bottom nav */}
+    <nav className="bnav" style={{position:"fixed",bottom:0,left:0,width:"100%",background:C.bg2,borderTop:`1px solid ${C.border}`,zIndex:200,paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+      <div ref={navRef} className="hnav">
+        {adminTabs.map(t=><button key={t.id} onClick={()=>setPage(t.id)} style={{flexShrink:0,flex:"1 0 auto",minWidth:60,padding:"9px 5px 7px",background:"transparent",border:"none",display:"flex",flexDirection:"column",alignItems:"center",gap:2,cursor:"pointer",borderTop:`2px solid ${page===t.id?color:"transparent"}`}}>
+          <span style={{fontSize:18}}>{t.icon}</span><span style={{fontSize:9,color:page===t.id?color:C.muted,fontWeight:page===t.id?700:400,whiteSpace:"nowrap"}}>{t.label}</span>
+        </button>)}
+      </div>
     </nav>
   </>;
 }
