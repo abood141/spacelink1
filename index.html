@@ -381,6 +381,8 @@ const DB={
   expenses:{
     async all(){const c=LC.get('expenses');if(c)return c;const d=(await sb.q('expenses','order=id.asc')).map(me);LC.set('expenses',d);return d;},
     async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,location:e.location||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
+    async upd(id,qty,notes){await sb.upd('expenses',`id=eq.${id}`,{quantity:qty,notes:notes||null});LC.del('expenses');},
+    async del(id){await sb.del('expenses',`id=eq.${id}`);LC.del('expenses');},
   },
   archive:{
     async all(){try{const c=LC.get('archive');if(c)return c;const d=await sb.q('operations_archive','order=archived_date.desc');LC.set('archive',d);return d;}catch{return[];}},
@@ -1051,6 +1053,28 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
   const [tuData,setTuData]=useState(null);
   useEffect(()=>{DB.techUsers.byTech(tech.id).then(setTuData);},[tech.id]);
   const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold).length;
+  
+  const todayStr = today();
+  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
+  
+  const tRecs = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type !== 'return');
+  const tRets = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type === 'return');
+  const tExps = expenses.filter(e => e.techId === tech.id && isToday(e.createdAt));
+  
+  const aggr = (arr) => {
+    const m = {};
+    arr.forEach(x => { m[x.itemId] = (m[x.itemId]||0) + x.quantity; });
+    return Object.entries(m).map(([id,qty])=>{
+      const it = items.find(i=>i.id===+id);
+      return {name:it?.name||"مادة", qty, unit:it?.unit||""};
+    });
+  };
+  const recDet = aggr(tRecs);
+  const retDet = aggr(tRets);
+  const expDet = aggr(tExps);
+  
+  const hasTodayActivity = recDet.length>0 || retDet.length>0 || expDet.length>0;
+
   return <Card style={{marginBottom:9,padding:"13px 15px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
       <div>
@@ -1068,6 +1092,31 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
         <Btn size="sm" color={C.red} onClick={()=>onDelete(tech)}>🗑</Btn>
       </div>
     </div>
+    
+    {hasTodayActivity && <div style={{marginTop:12, paddingTop:12, borderTop:`1px dashed ${C.border}`}}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
+        <div style={{fontWeight:700, fontSize:12, color:C.muted}}>نشاط اليوم:</div>
+        <button onClick={()=>onEdit({type:"activity", tech})} style={{background:`${C.blue}20`,color:C.blue,border:"none",borderRadius:6,padding:"2px 8px",fontSize:11,cursor:"pointer",fontWeight:700}}>✏️ تعديل النشاط</button>
+      </div>
+      {recDet.length > 0 && <div style={{marginBottom:6}}>
+        <div style={{fontSize:11, color:C.green, fontWeight:700, marginBottom:3}}>📥 استلم:</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:4}}>
+          {recDet.map((d,i) => <Badge key={i} color={C.green} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+        </div>
+      </div>}
+      {retDet.length > 0 && <div style={{marginBottom:6}}>
+        <div style={{fontSize:11, color:C.amber, fontWeight:700, marginBottom:3}}>↩️ أرجع:</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:4}}>
+          {retDet.map((d,i) => <Badge key={i} color={C.amber} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+        </div>
+      </div>}
+      {expDet.length > 0 && <div>
+        <div style={{fontSize:11, color:C.amber, fontWeight:700, marginBottom:3}}>📤 صرف:</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:4}}>
+          {expDet.map((d,i) => <Badge key={i} color={C.amber} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+        </div>
+      </div>}
+    </div>}
   </Card>;
 }
 function EditTechItem({tech,item,onClose,toast,user}){
@@ -1108,6 +1157,102 @@ function EditTechItem({tech,item,onClose,toast,user}){
     <Inp label="ملاحظات" value={notes} onChange={setNotes}/>
     
     <Btn onClick={save} color={type==="add"?C.green:C.red} full loading={saving} style={{marginTop:10}}>حفظ التعديل ✓</Btn>
+  </div>;
+}
+
+function EditDailyActivity({tech, user, toast, onClose}) {
+  const gs=useGS(["items","receipts","expenses"]);
+  const [editing, setEditing] = useState(null);
+  const [qty, setQty] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  if(!gs.receipts) return <Skel/>;
+  
+  const I = gs.items||[];
+  const todayStr = today();
+  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
+  
+  const recs = (gs.receipts||[]).filter(r => r.techId === tech.id && isToday(r.createdAt));
+  const exps = (gs.expenses||[]).filter(e => e.techId === tech.id && isToday(e.createdAt));
+  
+  const saveEdit = async () => {
+    if(!qty || +qty < 1){ toast("الكمية غير صحيحة", "error"); return; }
+    setSaving(true);
+    try {
+      if(editing.recordType === 'receipt') {
+        await DB.receipts.upd(editing.id, +qty, notes);
+      } else {
+        await DB.expenses.upd(editing.id, +qty, notes);
+      }
+      await DB.audit.add(user.displayName, "تعديل عملية", `تعديل كمية ${editing.recordType==='receipt'?'استلام':'صرف'} إلى ${qty}`);
+      await GS.reload("receipts","expenses");
+      toast("✅ تم التعديل");
+      setEditing(null);
+    } catch(e){ toast("خطأ: "+e.message, "error"); }
+    setSaving(false);
+  };
+  
+  const doDel = async (record, type) => {
+    if(!confirm("هل أنت متأكد من حذف هذه العملية نهائياً؟")) return;
+    try {
+      if(type === 'receipt') await DB.receipts.del(record.id);
+      else await DB.expenses.del(record.id);
+      await DB.audit.add(user.displayName, "حذف عملية", `تم حذف عملية ${type==='receipt'?'استلام':'صرف'} اليوم`);
+      await GS.reload("receipts","expenses");
+      toast("🗑 تم الحذف");
+    } catch(e){ toast("خطأ: "+e.message, "error"); }
+  };
+
+  if(editing) {
+    const item = I.find(i=>i.id === editing.itemId);
+    return <div>
+      <div style={{fontWeight:700, marginBottom:10}}>{editing.recordType==='receipt'?'📥 تعديل استلام':'📤 تعديل صرف'}: {item?.name}</div>
+      <Inp label="الكمية" type="number" value={qty} onChange={setQty}/>
+      <Inp label="ملاحظة" value={notes} onChange={setNotes}/>
+      <div style={{display:"flex", gap:8, marginTop:10}}>
+        <Btn onClick={saveEdit} color={C.blue} full loading={saving}>حفظ ✓</Btn>
+        <Btn onClick={()=>setEditing(null)} color={C.muted} outline full>إلغاء</Btn>
+      </div>
+    </div>;
+  }
+
+  return <div>
+    {recs.length === 0 && exps.length === 0 && <div style={{color:C.muted, textAlign:"center", padding:20}}>لا توجد عمليات اليوم</div>}
+    
+    {recs.length > 0 && <div style={{marginBottom:15}}>
+      <div style={{color:C.green, fontWeight:700, marginBottom:8}}>📥 استلامات اليوم</div>
+      {recs.map(r => {
+        const item = I.find(i=>i.id===r.itemId);
+        return <div key={'r'+r.id} style={{background:C.bg3, padding:"8px 12px", borderRadius:8, marginBottom:6, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+          <div>
+            <div style={{fontWeight:700, fontSize:13}}>{item?.name} ({r.quantity} {item?.unit})</div>
+            <div style={{fontSize:11, color:C.muted}}>{r.type==='return'?'↩️ استرجاع':'استلام'} {r.notes?` - ${r.notes}`:''}</div>
+          </div>
+          <div style={{display:"flex", gap:5}}>
+            <button onClick={()=>{setEditing({...r, recordType:'receipt'}); setQty(String(r.quantity)); setNotes(r.notes||"");}} style={{background:`${C.blue}20`,color:C.blue,border:"none",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✏️</button>
+            <button onClick={()=>doDel(r, 'receipt')} style={{background:`${C.red}20`,color:C.red,border:"none",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>🗑</button>
+          </div>
+        </div>;
+      })}
+    </div>}
+    
+    {exps.length > 0 && <div>
+      <div style={{color:C.amber, fontWeight:700, marginBottom:8}}>📤 صرفيات اليوم</div>
+      {exps.map(e => {
+        const item = I.find(i=>i.id===e.itemId);
+        return <div key={'e'+e.id} style={{background:C.bg3, padding:"8px 12px", borderRadius:8, marginBottom:6, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+          <div>
+            <div style={{fontWeight:700, fontSize:13}}>{item?.name} ({e.quantity} {item?.unit})</div>
+            <div style={{fontSize:11, color:C.muted}}>صرف {e.notes?` - ${e.notes}`:''}</div>
+          </div>
+          <div style={{display:"flex", gap:5}}>
+            <button onClick={()=>{setEditing({...e, recordType:'expense'}); setQty(String(e.quantity)); setNotes(e.notes||"");}} style={{background:`${C.blue}20`,color:C.blue,border:"none",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✏️</button>
+            <button onClick={()=>doDel(e, 'expense')} style={{background:`${C.red}20`,color:C.red,border:"none",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>🗑</button>
+          </div>
+        </div>;
+      })}
+    </div>}
   </div>;
 }
 
@@ -1176,6 +1321,10 @@ function AdminTechs({user,toast}){
 
     <Modal open={modal?.type==="pw"} onClose={()=>setModal(null)} title={`🔑 كلمة مرور — ${modal?.tech?.name}`}>
       {modal?.tu&&<ResetPw tu={modal.tu} onDone={async()=>{await DB.audit.add(user.displayName,"تغيير كلمة مرور",modal.tu.username);setModal(null);toast("✅ تم");}}/>}
+    </Modal>
+    
+    <Modal open={modal?.type==="activity"} onClose={()=>setModal(null)} title={`📅 تفاصيل نشاط اليوم — ${modal?.tech?.name}`}>
+      {modal?.tech&&<EditDailyActivity tech={modal.tech} user={user} toast={toast} onClose={()=>setModal(null)}/>}
     </Modal>
   </div>;
 }
