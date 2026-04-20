@@ -1161,8 +1161,9 @@ function EditTechItem({tech,item,onClose,toast,user}){
     <Inp label="الكمية *" type="number" value={qty} onChange={setQty} placeholder="مثال: 5"/>
     <Inp label="ملاحظات" value={notes} onChange={setNotes}/>
     
-    <Btn onClick={save} color={type==="add"?C.green:C.red} full loading={saving} style={{marginTop:10}}>حفظ التعديل ✓</Btn>
-  </div>;
+  <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
+        <Btn onClick={()=>{setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});setEditing(null);setModal("form");}} color={C.green} size="sm" icon="+">إضافة معدة</Btn>
+      </div>
 }
 
 function EditDailyActivity({tech, user, toast, onClose}) {
@@ -1408,7 +1409,7 @@ const save=async()=>{
       <div style={{display:"flex",gap:5}}>
         <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">طلب شراء</Btn>
         <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
-setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});setModal("form");
+        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة معدة</Btn>
       </div>
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
@@ -1425,8 +1426,8 @@ setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image
           <div style={{height:3,background:C.bg4,borderRadius:2,marginBottom:7,overflow:"hidden"}}>
             <div style={{height:"100%",width:`${Math.max(0,Math.min(100,stock<=0?0:(stock/(stock+it.threshold))*100))}%`,background:col,borderRadius:2,transition:"width .4s"}}/>
           </div>
-          <div style={{display:"flex",gap:4}}>
-setEditing(it);setForm({name:it.name,unit:it.unit,stock:it.stock||0,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");
+<div style={{display:"flex",gap:4}}>
+            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,stock:it.stock||0,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
             <Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${it.name}؟`)){await DB.items.del(it.id);await DB.audit.add(user.displayName,"حذف معدة",it.name);await GS.reload("items");toast("🗑 تم");}}} style={{flex:1,padding:"4px 6px"}}>🗑</Btn>
           </div>
         </div>
