@@ -498,18 +498,20 @@ function groupExpenses(expenses){
 const ARCHIVE_KEY='sl_history_archive';
 function getArchive(){try{return JSON.parse(localStorage.getItem(ARCHIVE_KEY)||'[]');}catch{return[];}}
 function saveArchive(a){try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify(a));}catch{}}
-function archiveToday(receipts,expenses,techs,items){
-  const t=today();
+function archiveYesterday(receipts,expenses,techs,items){
+  const bd=baghdadNow();
+  const yd=new Date(bd.getTime()-86400000);
+  const yStr=yd.toISOString().slice(0,10);
   const ar=getArchive();
-  if(ar.find(d=>d.date===t))return; // already archived today
-  const R=(receipts||[]).filter(r=>getDate(r)===t);
-  const E=(expenses||[]).filter(e=>getDate(e)===t);
+  if(ar.find(d=>d.date===yStr))return;
+  const R=(receipts||[]).filter(r=>getDate(r)===yStr);
+  const E=(expenses||[]).filter(e=>getDate(e)===yStr);
   if(!R.length&&!E.length)return;
   const T=techs||[],I=items||[];
   const recs=R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""}));
   const rawExp=E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
-  ar.unshift({date:t,receipts:recs,expGroups:groupExpenses(rawExp)});
-  saveArchive(ar.slice(0,90)); // keep 90 days
+  ar.unshift({date:yStr,receipts:recs,expGroups:groupExpenses(rawExp)});
+  saveArchive(ar.slice(0,30));
 }
 // Check if we should archive (midnight Baghdad)
 function checkMidnightArchive(gs){
@@ -518,7 +520,7 @@ function checkMidnightArchive(gs){
   const lastCheck=LC.get('last_archive_check');
   const todayStr=today();
   if(isNearMidnight&&lastCheck!==todayStr&&gs.receipts&&gs.techs){
-    archiveToday(gs.receipts,gs.expenses,gs.techs,gs.items);
+    archiveYesterday(gs.receipts,gs.expenses,gs.techs,gs.items);
     LC.set('last_archive_check',todayStr);
   }
 }
@@ -825,28 +827,33 @@ function RefreshDot(){
 
 // ── Login ─────────────────────────────────────────────
 function Login({onLogin}){
-  const [role,setRole]=useState("admin");const [u,setU]=useState("");const [p,setP]=useState("");const [err,setErr]=useState("");const [loading,setLoading]=useState(false);const [stay,setStay]=useState(true);
+  const [u,setU]=useState("");const [p,setP]=useState("");const [err,setErr]=useState("");const [loading,setLoading]=useState(false);const [stay,setStay]=useState(true);
   const login=async()=>{
     if(!u.trim()||!p.trim()){setErr("أدخل البيانات");return;}
     setLoading(true);setErr("");
     try{
       let user=null;
-      if(role==="admin"){
-        if(u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};}
-        else{const a=await Promise.race([DB.admins.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!a){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...a,role:"admin"};}
+      if(u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){
+        user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};
       }else{
-        const v=await Promise.race([DB.viewers.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);if(!v){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}user={...v,role:"viewer"};
+        const a=await Promise.race([DB.admins.login(u.trim(),p.trim()),new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),4000))]);
+        if(!a){setErr("❌ بيانات غير صحيحة");setLoading(false);return;}
+        user={...a,role:"admin"};
       }
       if(stay)localStorage.setItem("sl_session",JSON.stringify(user));
       else localStorage.removeItem("sl_session");
       onLogin(user);
     }catch(e){
-      if(role==="admin"&&u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){const user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};if(stay)localStorage.setItem("sl_session",JSON.stringify(user));onLogin(user);}
-      else setErr("خطأ في الاتصال: "+e.message);
+      if(u.trim()==="sattar141"&&hashPw(p.trim())===hashPw("Ak141@")){
+        const user={id:1,username:"sattar141",displayName:"Administrator",role:"admin"};
+        if(stay)localStorage.setItem("sl_session",JSON.stringify(user));
+        onLogin(user);
+      }else{
+        setErr("خطأ في الاتصال: "+e.message);
+      }
     }
     setLoading(false);
   };
-  const roles=[["admin","🔑","Admin",C.blue],["viewer","👁","Viewer",C.purple]];
   return <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
     <div style={{width:"100%",maxWidth:360}}>
       <div style={{textAlign:"center",marginBottom:28}}>
@@ -854,13 +861,8 @@ function Login({onLogin}){
         <div style={{fontWeight:800,fontSize:22}}>Space Link</div>
         <div style={{color:C.muted,fontSize:12,marginTop:3}}>نظام إدارة مكتب الإنترنت</div>
       </div>
-      <div style={{display:"flex",gap:4,marginBottom:16,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
-        {roles.map(([v,ic,l,c])=><button key={v} onClick={()=>{setRole(v);setErr("");setU("");setP("");}} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",cursor:"pointer",background:role===v?`${c}20`:"transparent",color:role===v?c:C.muted,fontWeight:role===v?700:400,fontSize:12,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-          <span style={{fontSize:17}}>{ic}</span><span>{l}</span>
-        </button>)}
-      </div>
       <Card style={{padding:20}}>
-        <Inp label="اسم المستخدم" value={u} onChange={v=>{setU(v);setErr("");}} placeholder={role==="admin"?"sattar141":"username"}/>
+        <Inp label="اسم المستخدم" value={u} onChange={v=>{setU(v);setErr("");}} placeholder="sattar141"/>
         <Inp label="كلمة المرور" type="password" value={p} onChange={v=>{setP(v);setErr("");}} placeholder="••••••"/>
         {err&&<div style={{color:C.red,fontSize:12,marginBottom:10,padding:"7px 11px",background:`${C.red}15`,borderRadius:8}}>{err}</div>}
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,cursor:"pointer"}} onClick={()=>setStay(!stay)}>
@@ -869,7 +871,7 @@ function Login({onLogin}){
           </div>
           <span style={{fontSize:12,color:stay?C.text:C.muted}}>ابقَ متصلاً</span>
         </div>
-        <Btn onClick={login} color={roles.find(r=>r[0]===role)?.[3]||C.blue} full size="lg" loading={loading}>
+        <Btn onClick={login} color={C.blue} full size="lg" loading={loading}>
           {loading?"⏳ جارٍ الاتصال بالخادم...":"دخول ←"}
         </Btn>
         {loading&&<div style={{textAlign:"center",marginTop:8,fontSize:11,color:C.muted,animation:"pulse 1.5s ease infinite"}}>
@@ -973,7 +975,7 @@ function AdminDash({user}){
         </div>;
       })}
     </Card>
-    <Card style={{padding:"14px 13px"}}>
+    <Card style={{padding:"14px 13px",marginBottom:12}}>
       <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
       {(()=>{
         const subs=[...new Set(todayE.map(e=>e.subscriberName).filter(Boolean))];
@@ -986,6 +988,24 @@ function AdminDash({user}){
         </div>;
       })()}
     </Card>
+    {(()=>{
+      const techsToday=T.filter(t=>todayR.some(r=>r.techId===t.id));
+      if(!techsToday.length)return null;
+      return <Card style={{padding:"14px 13px"}}>
+        <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📥 مستلمون اليوم</div>
+        {techsToday.map(t=>{
+          const tRecs=todayR.filter(r=>r.techId===t.id&&r.type!=='return');
+          const tRets=todayR.filter(r=>r.techId===t.id&&r.type==='return');
+          return <div key={t.id} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:5}}>{t.name}</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+              {tRecs.map((r,i)=>{const it=I.find(x=>x.id===r.itemId);return <Badge key={i} color={C.green} small>{it?.name||"—"}: {r.quantity} {it?.unit||""}</Badge>;})}
+              {tRets.map((r,i)=>{const it=I.find(x=>x.id===r.itemId);return <Badge key={'ret'+i} color={C.amber} small>↩ {it?.name||"—"}: {r.quantity}</Badge>;})}
+            </div>
+          </div>;
+        })}
+      </Card>;
+    })()}
   </div>;
 }
 
@@ -1511,17 +1531,45 @@ function AdminHistory(){
             <div>لا يوجد أرشيف بعد</div>
             <div style={{fontSize:12,marginTop:6}}>يُحفظ الأرشيف تلقائياً كل يوم ساعة 12 ليلاً بغداد</div>
           </div>
-        :archive.map((day,di)=><div key={di} style={{marginBottom:18}}>
-            {/* Day separator */}
-            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:11}}>
-              <div style={{flex:1,height:1,background:C.border}}/>
-              <div style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"4px 14px",fontSize:12,fontWeight:700,color:C.blue,whiteSpace:"nowrap"}}>📅 {day.date}</div>
-              <div style={{flex:1,height:1,background:C.border}}/>
+        :archive.map((day,di)=>{
+          const isExp = expanded[day.date];
+          const recs = day.receipts.filter(r=>r.type!=='return');
+          const rets = day.receipts.filter(r=>r.type==='return');
+          const exps = day.expGroups.flatMap(g=>g);
+          return <div key={di} style={{marginBottom:12,background:C.bg3,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+            <div onClick={()=>setExpanded(p=>({...p,[day.date]:!p[day.date]}))} style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",background:isExp?C.bg4:'transparent'}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:28,height:28,borderRadius:8,background:`${C.blue}20`,color:C.blue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📅</div>
+                <div>
+                  <div style={{fontWeight:700,fontSize:14}}>{day.date}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>{recs.length} تسليم · {rets.length} استرجاع · {exps.length} صرفية</div>
+                </div>
+              </div>
+              <div style={{transform:isExp?"rotate(180deg)":"none",transition:"transform 0.2s",color:C.muted}}>▼</div>
             </div>
-            <div style={{fontSize:11,color:C.muted,marginBottom:8,display:"flex",gap:10}}>
-              <span>تسليمات: {day.receipts}</span> | <span>صرفيات: {day.expenses}</span>
-            </div>
-          </div>)}
+            {isExp&&<div style={{padding:"14px",borderTop:`1px solid ${C.border}`}}>
+              {recs.length>0&&<div style={{marginBottom:10}}>
+                <div style={{color:C.green,fontSize:12,fontWeight:700,marginBottom:6}}>📥 استلامات</div>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  {recs.map((r,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.muted}}>{r.techName}</span><span>{r.quantity} {r.unit} {r.itemName}</span></div>)}
+                </div>
+              </div>}
+              {rets.length>0&&<div style={{marginBottom:10}}>
+                <div style={{color:C.amber,fontSize:12,fontWeight:700,marginBottom:6}}>↩️ استرجاعات</div>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  {rets.map((r,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.muted}}>{r.techName}</span><span>{r.quantity} {r.unit} {r.itemName}</span></div>)}
+                </div>
+              </div>}
+              {exps.length>0&&<div>
+                <div style={{color:C.red,fontSize:12,fontWeight:700,marginBottom:6}}>📤 صرفيات</div>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  {exps.map((e,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.muted}}>{e.techName}</span><span>{e.quantity} {e.unit} {e.itemName}</span></div>)}
+                </div>
+              </div>}
+              {recs.length===0&&rets.length===0&&exps.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center"}}>لا توجد تفاصيل</div>}
+            </div>}
+          </div>
+        })}
     </>}
   </div>;
 }
