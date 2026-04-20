@@ -1160,10 +1160,8 @@ function EditTechItem({tech,item,onClose,toast,user}){
 
     <Inp label="الكمية *" type="number" value={qty} onChange={setQty} placeholder="مثال: 5"/>
     <Inp label="ملاحظات" value={notes} onChange={setNotes}/>
-    
-  <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
-        <Btn onClick={()=>{setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});setEditing(null);setModal("form");}} color={C.green} size="sm" icon="+">إضافة معدة</Btn>
-      </div>
+    <Btn onClick={save} color={type==="add"?C.green:C.red} full loading={saving}>حفظ التعديل ✓</Btn>
+  </div>;
 }
 
 function EditDailyActivity({tech, user, toast, onClose}) {
@@ -1385,7 +1383,11 @@ function BarcodeScanner({onResult,onClose}){
 
 function AdminItems({user,toast}){
   const gs=useGS(["items","receipts","expenses"]);
-const [form,setForm]=useState({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [form,setForm]=useState({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});
   const items=(gs.items||[]).filter(i=>i.is_active!==false);const receipts=gs.receipts||[];const expenses=gs.expenses||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
   const getStock=it=>{
