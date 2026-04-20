@@ -8,6 +8,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#07090F">
   <title>Space Link</title>
+  <meta name="description"
+    content="نظام Space Link: لوحة تحكم ذكية لإدارة مخزون مكتب الإنترنت، تتبع الفنيين، وتسجيل عمليات الصرف والتسليم.">
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="preconnect" href="https://icpqrnzvxjexdzwfkcjm.supabase.co" crossorigin>
   <link rel="manifest"
@@ -182,7 +184,7 @@
       <div class="lbar-fill"></div>
     </div>
   </div>
-  <div id="root"></div>
+  <main id="root"></main>
 
   <script>
     // ── Service Worker Cache ─────────────────────────────
@@ -918,7 +920,7 @@ function Login({onLogin}){
           🔄 قد يستغرق إيقاظ الخادم 10-20 ثانية في أول تشغيل...
         </div>}
       </Card>
-      {role!=="admin"&&<div style={{textAlign:"center",color:C.muted,fontSize:11,marginTop:12}}>الحساب يُنشئه الإداري فقط</div>}
+      <div style={{textAlign:"center",color:C.muted,fontSize:11,marginTop:12}}>الحساب يُنشئه الإداري فقط</div>
     </div>
   </div>;
 }
@@ -1655,6 +1657,7 @@ function AdminReceipt({user,toast}){
 function AdminHistory(){
   const [filter,setFilter]=useState("today");
   const [tab,setTab]=useState("live");
+  const [expanded, setExpanded] = useState({});
   const [dateFilter,setDateFilter]=useState(today());
   const gs=useGS(["receipts","expenses","techs","items"]);
 
