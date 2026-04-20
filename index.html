@@ -299,6 +299,7 @@ const SQ={
   async flush(){
     const q=this.get();if(!q.length)return;
     let flushed=0;
+    const processedIds=new Set();
     for(const op of q){
       try{
         if(op.type==='expense'){
@@ -307,10 +308,14 @@ const SQ={
         }else if(op.type==='receipt'){
           await DB.receipts.add(op.data.techId,op.data.itemId,op.data.quantity,op.data.notes,op.data.adminId);
         }
-        this.remove(op.id);flushed++;
+        processedIds.add(op.id);flushed++;
       }catch(e){console.warn('SQ flush failed:',e.message);break;}
     }
-    if(flushed>0){await GS.reload('receipts','expenses');LC.set('sync_queue',this.get());}
+    if(flushed>0){
+      const remaining=this.get().filter(o=>!processedIds.has(o.id));
+      LC.set('sync_queue',remaining);
+      await GS.reload('receipts','expenses');
+    }
     return flushed;
   }
 };
@@ -437,7 +442,7 @@ GS.loadStale();
 
 // â”€â”€ Supabase Realtime â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const RT={
-  _client:null,_channels:[],_active:false,
+  _client:null,_channels:[],_active:false,_timers:{},
   init(){
     if(this._active||!window.supabase)return;
     try{
@@ -457,8 +462,11 @@ const RT={
         .on('postgres_changes',{event:'*',schema:'public',table},(payload)=>{
           console.log('[RT]',table,payload.eventType);
           const gsKey=table==='technicians'?'techs':table;
-          LC.del(gsKey);
-          GS.reload(gsKey);
+          clearTimeout(this._timers[gsKey]);
+          this._timers[gsKey] = setTimeout(()=>{
+            LC.del(gsKey);
+            GS.reload(gsKey);
+          }, 500);
         })
         .subscribe((status)=>{
           if(status==='SUBSCRIBED')console.log('[RT] subscribed:',table);
@@ -474,20 +482,47 @@ const RT={
   },
 };
 
-function useGS(keys){
-  const [d,setD]=useState(()=>({...GS.get()}));
-  useEffect(()=>{const off=GS.on(x=>setD({...x}));GS.load(keys);return off;},[]);
+function useGS(keysArg){
+  const keysStr = JSON.stringify(keysArg);
+  const [d, setD] = useState(() => ({...GS.get()}));
+  useEffect(() => {
+    const keys = JSON.parse(keysStr);
+    let last = GS.get();
+    const off = GS.on((newGS) => {
+      const changed = keys ? keys.some(k => newGS[k] !== last[k]) : true;
+      if (changed || newGS._status !== last._status) {
+        last = {...newGS};
+        setD(last);
+      }
+    });
+    GS.load(keys);
+    return off;
+  }, [keysStr]);
   return d;
 }
 
 // ── Helpers ───────────────────────────────────────────
 function calcBals(techId,items,receipts,expenses){
-  return items.map(item=>{
-    const rec=(receipts||[]).filter(r=>r.techId===+techId&&r.itemId===item.id&&r.type!=='return').reduce((s,r)=>s+r.quantity,0);
-    const ret=(receipts||[]).filter(r=>r.techId===+techId&&r.itemId===item.id&&r.type==='return').reduce((s,r)=>s+r.quantity,0);
-    const sp=(expenses||[]).filter(e=>e.techId===+techId&&e.itemId===item.id).reduce((s,e)=>s+e.quantity,0);
-    return rec>0||sp>0||ret>0?{...item,received:rec,spent:sp,returned:ret,balance:rec-(sp+ret)}:null;
-  }).filter(Boolean);
+  const stats = {};
+  for(const r of (receipts||[])){
+    if(r.techId!==+techId)continue;
+    if(!stats[r.itemId]) stats[r.itemId]={rec:0,ret:0,sp:0};
+    if(r.type==='return') stats[r.itemId].ret+=r.quantity;
+    else stats[r.itemId].rec+=r.quantity;
+  }
+  for(const e of (expenses||[])){
+    if(e.techId!==+techId)continue;
+    if(!stats[e.itemId]) stats[e.itemId]={rec:0,ret:0,sp:0};
+    stats[e.itemId].sp+=e.quantity;
+  }
+  const result=[];
+  for(const item of items){
+    const s=stats[item.id];
+    if(s&&(s.rec>0||s.sp>0||s.ret>0)){
+      result.push({...item,received:s.rec,spent:s.sp,returned:s.ret,balance:s.rec-(s.sp+s.ret)});
+    }
+  }
+  return result;
 }
 function groupExpenses(expenses){
   const m={};
@@ -1479,12 +1514,14 @@ function AdminHistory(){
   },[gs.receipts]);
 
   if(!gs.receipts)return <Skel/>;
-  const T=gs.techs||[],I=gs.items||[],R=gs.receipts||[],E=gs.expenses||[];
-
-  // Build ops
-  const allReceipts=R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""})).sort((a,b)=>b.createdAt>a.createdAt?1:-1);
-  const rawExp=E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
-  const allExpGroups=groupExpenses(rawExp);
+  
+  // Memoize heavy transformations
+  const { allReceipts, allExpGroups } = useMemo(() => {
+    const T=gs.techs||[], I=gs.items||[], R=gs.receipts||[], E=gs.expenses||[];
+    const recs = R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""})).sort((a,b)=>b.createdAt>a.createdAt?1:-1);
+    const exps = E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
+    return { allReceipts: recs, allExpGroups: groupExpenses(exps) };
+  }, [gs.receipts, gs.expenses, gs.techs, gs.items]);
 
   // Date filter
   const getD=r=>(r.createdAt||"").slice(0,10).replace(/\//g,"-");
@@ -1684,11 +1721,173 @@ function AdminExpense({user,toast}){
 
 // ── Admin Reports ─────────────────────────────────────
 function AdminReports(){
+  const gs=useGS(["techs","items","receipts","expenses"]);
+  const [tab, setTab] = useState("daily");
+  const [expandedDate, setExpandedDate] = useState({});
+
+  if(!gs.receipts) return <Skel/>;
+  
+  const T = (gs.techs || []).filter(t=>t.is_active!==false);
+  const I = (gs.items || []).filter(i=>i.is_active!==false);
+  const R = gs.receipts || [];
+  const E = gs.expenses || [];
+  
+  const todayStr = today();
+  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
+  
+  // Tab 1: Daily Activity
+  const todayR = R.filter(r => isToday(r.createdAt));
+  const todayE = E.filter(e => isToday(e.createdAt));
+  
+  // Tab 2: Archive
+  const archive = getArchive();
+  
+  // Tab 3: Insights
+  const techExpSum = T.map(t => ({...t, totalExp: E.filter(e => e.techId === t.id).reduce((s,e)=>s+e.quantity,0)}));
+  const topTech = techExpSum.reduce((a,b) => b.totalExp > a.totalExp ? b : a, techExpSum[0] || {});
+  
+  const itemExpSum = {};
+  E.forEach(e => {
+    itemExpSum[e.itemId] = (itemExpSum[e.itemId] || 0) + e.quantity;
+  });
+  const topItems = Object.entries(itemExpSum)
+    .sort((a,b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([id, qty]) => {
+      const it = I.find(i=>i.id===+id);
+      return {name: it?.name || "—", qty, unit: it?.unit || ""};
+    });
+    
+  const activeDays = new Set(E.map(e => e.createdAt?.slice(0,10)).filter(Boolean)).size || 1;
+  const totalExpQty = E.reduce((s,e) => s+e.quantity, 0);
+  const avgDispense = (totalExpQty / activeDays).toFixed(1);
+
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📈 التقارير والإحصائيات</div>
-    <Card style={{padding:20,textAlign:"center",color:C.muted}}>
-      <div>التقارير قيد التطوير... سيتم إضافتها قريباً.</div>
-    </Card>
+    
+    <div style={{display:"flex",gap:4,marginBottom:14,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
+      {[
+        {id: "daily", label: "نشاط اليوم", icon: "📅"},
+        {id: "archive", label: "الأرشيف", icon: "🗃"},
+        {id: "insights", label: "رؤى ذكية", icon: "🤖"}
+      ].map(t => (
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",cursor:"pointer",background:tab===t.id?`${C.blue}20`:"transparent",color:tab===t.id?C.blue:C.muted,fontWeight:tab===t.id?700:400,fontSize:12}}>
+          {t.icon} {t.label}
+        </button>
+      ))}
+    </div>
+
+    {tab === "daily" && (
+      <div style={{display:"flex", flexDirection:"column", gap:10}}>
+        {T.map(t => {
+          const tR = todayR.filter(r => r.techId === t.id && r.type !== 'return').reduce((s,r)=>s+r.quantity, 0);
+          const tE = todayE.filter(e => e.techId === t.id).reduce((s,e)=>s+e.quantity, 0);
+          const hasActivity = tR > 0 || tE > 0;
+          return <Card key={t.id} style={{padding:"12px 14px"}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <div style={{fontWeight:700, fontSize:14}}>{t.name}</div>
+              {!hasActivity && <Badge color={C.muted} small>لا يوجد نشاط</Badge>}
+            </div>
+            {hasActivity && <div style={{display:"flex", gap:8, marginTop:8}}>
+              {tR > 0 && <Badge color={C.green} small>📥 استلم: {tR}</Badge>}
+              {tE > 0 && <Badge color={C.amber} small>📤 صرف: {tE}</Badge>}
+            </div>}
+          </Card>;
+        })}
+      </div>
+    )}
+
+    {tab === "archive" && (
+      <div>
+        {archive.length === 0 ? (
+          <div style={{color:C.muted,textAlign:"center",padding:40}}>لا يوجد أرشيف</div>
+        ) : (
+          archive.map((day, di) => {
+            const isExp = expandedDate[day.date];
+            const recs = day.receipts.filter(r=>r.type!=='return');
+            const rets = day.receipts.filter(r=>r.type==='return');
+            const exps = day.expGroups.flatMap(g=>g);
+            return <div key={di} style={{marginBottom:10,background:C.bg3,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+              <div onClick={()=>setExpandedDate(p=>({...p,[day.date]:!p[day.date]}))} style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",background:isExp?C.bg4:'transparent'}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:28,height:28,borderRadius:8,background:`${C.blue}20`,color:C.blue,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📅</div>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:14}}>{day.date}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{recs.length} تسليم · {exps.length} صرفية</div>
+                  </div>
+                </div>
+                <div style={{transform:isExp?"rotate(180deg)":"none",transition:"transform 0.2s",color:C.muted}}>▼</div>
+              </div>
+              {isExp && <div style={{padding:"14px",borderTop:`1px solid ${C.border}`}}>
+                {recs.length>0&&<div style={{marginBottom:10}}>
+                  <div style={{color:C.green,fontSize:12,fontWeight:700,marginBottom:6}}>📥 استلامات</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {recs.map((r,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.text}}>{r.techName}</span><span style={{color:C.green}}>{r.quantity} {r.unit} {r.itemName}</span></div>)}
+                  </div>
+                </div>}
+                {rets.length>0&&<div style={{marginBottom:10}}>
+                  <div style={{color:C.amber,fontSize:12,fontWeight:700,marginBottom:6}}>↩️ استرجاعات</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {rets.map((r,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.text}}>{r.techName}</span><span style={{color:C.amber}}>{r.quantity} {r.unit} {r.itemName}</span></div>)}
+                  </div>
+                </div>}
+                {exps.length>0&&<div>
+                  <div style={{color:C.amber,fontSize:12,fontWeight:700,marginBottom:6}}>📤 صرفيات</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {exps.map((e,i)=><div key={i} style={{fontSize:12,display:"flex",justifyContent:"space-between"}}><span style={{color:C.text}}>{e.techName}</span><span style={{color:C.amber}}>{e.quantity} {e.unit} {e.itemName}</span></div>)}
+                  </div>
+                </div>}
+                {recs.length===0&&rets.length===0&&exps.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center"}}>لا توجد تفاصيل</div>}
+              </div>}
+            </div>;
+          })
+        )}
+      </div>
+    )}
+
+    {tab === "insights" && (
+      <div style={{display:"grid", gap:12}}>
+        <Card style={{padding:16}}>
+          <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+            <span style={{fontSize:24}}>🏆</span>
+            <div>
+              <div style={{color:C.muted, fontSize:12}}>الفني الأكثر نشاطاً</div>
+              <div style={{fontWeight:700, fontSize:16, color:C.green}}>{topTech?.name || "—"}</div>
+            </div>
+          </div>
+          <div style={{fontSize:12, color:C.muted}}>إجمالي صرفياته: <strong style={{color:C.text}}>{topTech?.totalExp || 0}</strong> مادة</div>
+        </Card>
+        
+        <Card style={{padding:16}}>
+          <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:10}}>
+            <span style={{fontSize:24}}>🔥</span>
+            <div>
+              <div style={{color:C.muted, fontSize:12}}>المواد الأكثر استهلاكاً</div>
+              <div style={{fontWeight:700, fontSize:14, color:C.amber}}>أكثر 3 مواد صرفاً</div>
+            </div>
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:6}}>
+            {topItems.length > 0 ? topItems.map((it, i) => (
+              <div key={i} style={{display:"flex", justifyContent:"space-between", fontSize:13, background:C.bg4, padding:"6px 10px", borderRadius:6}}>
+                <span>{it.name}</span>
+                <span style={{color:C.amber, fontWeight:700}}>{it.qty} {it.unit}</span>
+              </div>
+            )) : <div style={{fontSize:12, color:C.muted}}>لا توجد بيانات</div>}
+          </div>
+        </Card>
+        
+        <Card style={{padding:16}}>
+          <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+            <span style={{fontSize:24}}>⏱️</span>
+            <div>
+              <div style={{color:C.muted, fontSize:12}}>معدل الصرف</div>
+              <div style={{fontWeight:700, fontSize:16, color:C.blue}}>{avgDispense} وحدة / يوم نشط</div>
+            </div>
+          </div>
+          <div style={{fontSize:12, color:C.muted}}>تم الحساب على أساس <strong style={{color:C.text}}>{activeDays}</strong> يوم عمل نشط</div>
+        </Card>
+      </div>
+    )}
   </div>;
 }
 
