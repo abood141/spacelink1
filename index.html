@@ -213,6 +213,9 @@ self.addEventListener('fetch',e=>{if(e.request.url.includes('supabase'))return;e
 
     async function boot() {
       try {
+        if (document.readyState === 'loading') {
+          await new Promise(r => document.addEventListener('DOMContentLoaded', r));
+        }
         await Promise.all([
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js'),
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'),
