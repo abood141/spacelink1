@@ -283,10 +283,12 @@ const sb={
 
 // ── Utils ────────────────────────────────────────────
 const baghdadNow=()=>new Date(Date.now()+3*3600000);
-const now=()=>baghdadNow().toLocaleString("ar-IQ",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+const now=()=>baghdadNow().toLocaleString("en-GB",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
 const today=()=>baghdadNow().toISOString().slice(0,10);
 function hashPw(pw){let h=5381;for(let i=0;i<pw.length;i++)h=((h<<5)+h)^pw.charCodeAt(i);return(h>>>0).toString(16).padStart(8,"0");}
-const getDate=r=>(r?.createdAt||r?.created_at||"").slice(0,10).replace(/\//g,"-");
+const normD=d=>{if(!d)return"";const m=d.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})|(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);if(!m)return"";const p=x=>String(x).padStart(2,'0');return m[1]?`${m[1]}-${p(m[2])}-${p(m[3])}`:`${m[6]}-${p(m[5])}-${p(m[4])}`;};
+const getDate=r=>normD(r?.createdAt||r?.created_at);
+const isToday=d=>normD(d)===today();
 
 // ── Local cache ──────────────────────────────────────
 const LC={
@@ -333,7 +335,7 @@ const mt=r=>r?{id:r.id,name:r.name,phone:r.phone,is_active:r.is_active??true,cre
 const mtu=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,techId:r.tech_id,createdAt:r.created_at}:null;
 const mv=r=>r?{id:r.id,username:r.username,passwordHash:r.password_hash,displayName:r.display_name,createdAt:r.created_at}:null;
 const mr=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,notes:r.notes,adminId:r.admin_id,type:r.type||'receipt',createdAt:r.created_at}:null;
-const me=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,subscriberName:r.subscriber_name,subscriberUser:r.subscriber_user,notes:r.notes,workImage:r.work_image,location:r.location,groupId:r.group_id,createdAt:r.created_at}:null;
+const me=r=>r?{id:r.id,techId:r.tech_id,itemId:r.item_id,quantity:r.quantity,subscriberName:r.subscriber_name,subscriberUser:r.subscriber_user,notes:r.notes,workImage:r.work_image,groupId:r.group_id,createdAt:r.created_at}:null;
 
 const DB={
   items:{
@@ -385,7 +387,7 @@ async upd(item){await sb.upd('items',`id=eq.${item.id}`,{name:item.name,unit:ite
   },
   expenses:{
     async all(){const c=LC.get('expenses');if(c)return c;const d=(await sb.q('expenses','order=id.asc')).map(me);LC.set('expenses',d);return d;},
-    async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,location:e.location||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
+    async add(e){const r=await sb.ins('expenses',{tech_id:e.techId,item_id:e.itemId,quantity:e.quantity,subscriber_name:e.subscriberName||null,subscriber_user:e.subscriberUser||null,notes:e.notes||null,work_image:e.workImage||null,group_id:e.groupId||null,created_at:e.createdAt||now()});LC.del('expenses');return me(r);},
     async upd(id,qty,notes){await sb.upd('expenses',`id=eq.${id}`,{quantity:qty,notes:notes||null});LC.del('expenses');},
     async del(id){await sb.del('expenses',`id=eq.${id}`);LC.del('expenses');},
   },
@@ -709,21 +711,7 @@ const ImgPick=({value,onChange,label="صورة"})=>{
   </div>;
 };
 
-const GPS=({onLoc})=>{
-  const [loading,setLoading]=useState(false);const [loc,setLoc]=useState(null);
-  const get=()=>{if(!navigator.geolocation){alert("لا يدعم GPS");return;}setLoading(true);
-    navigator.geolocation.getCurrentPosition(p=>{const l={lat:p.coords.latitude.toFixed(6),lng:p.coords.longitude.toFixed(6),accuracy:Math.round(p.coords.accuracy)};setLoc(l);onLoc(l);setLoading(false);},e=>{setLoading(false);alert("خطأ GPS: "+e.message);},{enableHighAccuracy:true,timeout:10000});};
-  return <div style={{marginBottom:12}}>
-    <div style={{color:C.muted,fontSize:11,marginBottom:5}}>موقع GPS</div>
-    <div style={{display:"flex",gap:8,alignItems:"center"}}>
-      <Btn onClick={get} disabled={loading} color={C.cyan} size="sm" icon="📍">{loading?"جارٍ...":"تحديد الموقع"}</Btn>
-      {loc&&<a href={`https://maps.google.com/?q=${loc.lat},${loc.lng}`} target="_blank" rel="noreferrer" style={{color:C.cyan,fontSize:12,textDecoration:"none"}}>🗺 عرض</a>}
-    </div>
-    {loc&&<div style={{background:C.bg3,border:`1px solid ${C.cyan}40`,borderRadius:8,padding:"7px 11px",marginTop:5,fontSize:11}}>
-      <span style={{color:C.cyan}}>📌 {loc.lat}, {loc.lng}</span><span style={{color:C.muted,marginRight:8}}> دقة: {loc.accuracy}م</span>
-    </div>}
-  </div>;
-};
+
 
 // ── Simple Charts ─────────────────────────────────────
 function BarSVG({data,keys,colors,h=160}){
@@ -761,7 +749,7 @@ function OpsRow({op}){
     </div>
     <div style={{color:C.text,fontSize:13,marginBottom:2}}>{op.itemName}</div>
     {op.subscriberName&&<div style={{color:C.cyan,fontSize:12}}>👤 {op.subscriberName}{op.subscriberUser&&` (@${op.subscriberUser})`}</div>}
-    {op.location&&<a href={`https://maps.google.com/?q=${op.location.lat},${op.location.lng}`} target="_blank" rel="noreferrer" style={{color:C.cyan,fontSize:12,display:"block",textDecoration:"none"}}>📍 الموقع</a>}
+
     {op.notes&&<div style={{color:C.muted,fontSize:11}}>📝 {op.notes}</div>}
     {op.workImage&&<><button onClick={()=>setOpen(true)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"2px 9px",fontSize:11,cursor:"pointer",marginTop:3}}>🖼 صورة</button>
     {open&&<div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.92)",zIndex:8000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}><img src={op.workImage} style={{maxWidth:"100%",maxHeight:"88vh",borderRadius:12}} alt=""/></div>}</>}
@@ -779,7 +767,7 @@ function GroupedRow({group,allItems}){
         <span style={{fontWeight:700,color:c,fontSize:13}}>{op.quantity} {op.unit}</span>
       </div>;})}
     </div>
-    {first.location&&<a href={`https://maps.google.com/?q=${first.location.lat},${first.location.lng}`} target="_blank" rel="noreferrer" style={{color:C.cyan,fontSize:12,display:"block",textDecoration:"none",marginBottom:2}}>📍 الموقع</a>}
+
     {first.notes&&<div style={{color:C.muted,fontSize:11,marginBottom:2}}>📝 {first.notes}</div>}
     {first.workImage&&<><button onClick={()=>setOpen(true)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"2px 9px",fontSize:11,cursor:"pointer",marginTop:2,marginBottom:2}}>🖼 صورة</button>
     {open&&<div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.92)",zIndex:8000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}><img src={first.workImage} style={{maxWidth:"100%",maxHeight:"88vh",borderRadius:12}} alt=""/></div>}</>}
@@ -935,11 +923,9 @@ function AdminDash({user}){
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
   const top=Object.values(um).sort((a,b)=>b.total-a.total).slice(0,6);
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
-  const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>r.createdAt?.includes(d.replace(/-/g,"/"))||r.createdAt?.startsWith(d)).length,"صرفية":E.filter(e=>e.createdAt?.includes(d.replace(/-/g,"/"))||e.createdAt?.startsWith(d)).length}));
+  const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>normD(r.createdAt)===d).length,"صرفية":E.filter(e=>normD(e.createdAt)===d).length}));
   const pie=top.slice(0,5).map((it,i)=>({name:it.name,value:it.total,fill:C.chart[i]}));
-  const todayStr=today();
-const altToday = todayStr.split('-').reverse().join('-');
-const isToday=d=>d&&(d.startsWith(todayStr)||d.startsWith(altToday)||d.replace(/\//g,"-").startsWith(todayStr)||d.replace(/\//g,"-").startsWith(altToday));
+
   const todayR=R.filter(r=>isToday(r.createdAt));
   const todayE=E.filter(e=>isToday(e.createdAt));
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
@@ -1060,9 +1046,6 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
   useEffect(()=>{DB.techUsers.byTech(tech.id).then(setTuData);},[tech.id]);
   const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold).length;
   
-  const todayStr = today();
-  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
-  
   const tRecs = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type !== 'return');
   const tRets = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type === 'return');
   const tExps = expenses.filter(e => e.techId === tech.id && isToday(e.createdAt));
@@ -1175,8 +1158,6 @@ function EditDailyActivity({tech, user, toast, onClose}) {
   if(!gs.receipts) return <Skel/>;
   
   const I = gs.items||[];
-  const todayStr = today();
-  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
   
   const recs = (gs.receipts||[]).filter(r => r.techId === tech.id && isToday(r.createdAt));
   const exps = (gs.expenses||[]).filter(e => e.techId === tech.id && isToday(e.createdAt));
@@ -1467,9 +1448,8 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
   const [editing,setEditing]=useState(null);
   const [ef,setEf]=useState({qty:1,notes:"",tid:"",iid:""});
   const [saving,setSaving]=useState(false);
-  const getD=r=>(r.createdAt||"").slice(0,10).replace(/[\/]/g,"-");
-  const dates=[...new Set(hist.map(getD).filter(Boolean))].sort((a,b)=>b>a?1:-1);
-const recs=hist.filter(r=>getD(r)===selDate || getD(r)===selDate.split('-').reverse().join('-'));
+  const dates=[...new Set(hist.map(getDate).filter(Boolean))].sort((a,b)=>b>a?1:-1);
+  const recs=hist.filter(r=>getDate(r)===selDate);
   const go=dir=>{const idx=dates.indexOf(selDate);const n=dates[idx+dir];if(n)setSelDate(n);};
   const openEdit=r=>{ setEditing(r); setEf({qty:r.quantity,notes:r.notes||"",tid:String(r.techId),iid:String(r.itemId)}); };
   const doDelete=async r=>{
@@ -1686,10 +1666,8 @@ function AdminHistory(){
   }, [gs.receipts, gs.expenses, gs.techs, gs.items]);
 
   // Date filter
-  const getD=r=>(r.createdAt||"").slice(0,10).replace(/\//g,"-");
-const altDate = dateFilter ? dateFilter.split('-').reverse().join('-') : "";
-const receipts=dateFilter?allReceipts.filter(r=>getD(r)===dateFilter || getD(r)===altDate):allReceipts;
-const expGroups=dateFilter?allExpGroups.filter(g=>getD(g[0])===dateFilter || getD(g[0])===altDate):allExpGroups;
+  const receipts=dateFilter?allReceipts.filter(r=>getDate(r)===dateFilter):allReceipts;
+  const expGroups=dateFilter?allExpGroups.filter(g=>getDate(g[0])===dateFilter):allExpGroups;
 
   // Archive
   const archive=getArchive();
@@ -1780,7 +1758,6 @@ function AdminExpense({user,toast}){
   const [tid,setTid]=useState("");
   const [subName,setSubName]=useState("");
   const [subUser,setSubUser]=useState("");
-  const [location,setLocation]=useState("");
   const [notes,setNotes]=useState("");
   const [ok,setOk]=useState("");
   const [saving,setSaving]=useState(false);
@@ -1823,7 +1800,7 @@ function AdminExpense({user,toast}){
       const groupId=Date.now().toString()+"_"+(subName||"");
       await Promise.all(valid.map(l=>{
         const it=items.find(x=>x.id===+l.iid);
-        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:subUser||null, notes:notes||null, location:location||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name} - ${subName||"غير محدد"}`));
+        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:subUser||null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name} - ${subName||"غير محدد"}`));
       }));
       await GS.reload("expenses");
       setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
@@ -1844,10 +1821,7 @@ function AdminExpense({user,toast}){
       <div style={{height:1,background:C.border,margin:"15px 0"}}/>
       <div style={{color:C.blue,fontWeight:700,fontSize:13,marginBottom:10}}>تفاصيل العملية (تُطبق على كل المواد)</div>
       <Inp label="اسم المشترك / الموقع" value={subName} onChange={setSubName} placeholder="مثال: علي محمد..."/>
-      <div style={{display:"flex",gap:10}}>
-        <div style={{flex:1}}><Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="اختياري..."/></div>
-        <div style={{flex:1}}><Inp label="إحداثيات الموقع" value={location} onChange={setLocation} placeholder="اختياري..."/></div>
-      </div>
+      <div style={{width:"100%"}}><Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="اختياري..."/></div>
       <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
       
       <div style={{height:1,background:C.border,margin:"15px 0"}}/>
@@ -1894,9 +1868,6 @@ function AdminReports(){
   const I = (gs.items || []).filter(i=>i.is_active!==false);
   const R = gs.receipts || [];
   const E = gs.expenses || [];
-  
-  const todayStr = today();
-  const isToday = d => d && (d.startsWith(todayStr) || d.replace(/\//g, "-").startsWith(todayStr));
   
   // Tab 1: Daily Activity
   const todayR = R.filter(r => isToday(r.createdAt));
