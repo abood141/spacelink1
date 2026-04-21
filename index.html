@@ -938,7 +938,8 @@ function AdminDash({user}){
   const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>r.createdAt?.includes(d.replace(/-/g,"/"))||r.createdAt?.startsWith(d)).length,"صرفية":E.filter(e=>e.createdAt?.includes(d.replace(/-/g,"/"))||e.createdAt?.startsWith(d)).length}));
   const pie=top.slice(0,5).map((it,i)=>({name:it.name,value:it.total,fill:C.chart[i]}));
   const todayStr=today();
-  const isToday=d=>d&&(d.startsWith(todayStr)||d.replace(/\//g,"-").startsWith(todayStr));
+const altToday = todayStr.split('-').reverse().join('-');
+const isToday=d=>d&&(d.startsWith(todayStr)||d.startsWith(altToday)||d.replace(/\//g,"-").startsWith(todayStr)||d.replace(/\//g,"-").startsWith(altToday));
   const todayR=R.filter(r=>isToday(r.createdAt));
   const todayE=E.filter(e=>isToday(e.createdAt));
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
@@ -1468,7 +1469,7 @@ function ReceiptByDay({hist,techs,items,toast,onRefresh}){
   const [saving,setSaving]=useState(false);
   const getD=r=>(r.createdAt||"").slice(0,10).replace(/[\/]/g,"-");
   const dates=[...new Set(hist.map(getD).filter(Boolean))].sort((a,b)=>b>a?1:-1);
-  const recs=hist.filter(r=>getD(r)===selDate);
+const recs=hist.filter(r=>getD(r)===selDate || getD(r)===selDate.split('-').reverse().join('-'));
   const go=dir=>{const idx=dates.indexOf(selDate);const n=dates[idx+dir];if(n)setSelDate(n);};
   const openEdit=r=>{ setEditing(r); setEf({qty:r.quantity,notes:r.notes||"",tid:String(r.techId),iid:String(r.itemId)}); };
   const doDelete=async r=>{
@@ -1686,8 +1687,9 @@ function AdminHistory(){
 
   // Date filter
   const getD=r=>(r.createdAt||"").slice(0,10).replace(/\//g,"-");
-  const receipts=dateFilter?allReceipts.filter(r=>getD(r)===dateFilter):allReceipts;
-  const expGroups=dateFilter?allExpGroups.filter(g=>getD(g[0])===dateFilter):allExpGroups;
+const altDate = dateFilter ? dateFilter.split('-').reverse().join('-') : "";
+const receipts=dateFilter?allReceipts.filter(r=>getD(r)===dateFilter || getD(r)===altDate):allReceipts;
+const expGroups=dateFilter?allExpGroups.filter(g=>getD(g[0])===dateFilter || getD(g[0])===altDate):allExpGroups;
 
   // Archive
   const archive=getArchive();
@@ -1938,20 +1940,46 @@ function AdminReports(){
       ))}
     </div>
 
-    {tab === "daily" && (
+{tab === "daily" && (
       <div style={{display:"flex", flexDirection:"column", gap:10}}>
         {T.map(t => {
-          const tR = todayR.filter(r => r.techId === t.id && r.type !== 'return').reduce((s,r)=>s+r.quantity, 0);
-          const tE = todayE.filter(e => e.techId === t.id).reduce((s,e)=>s+e.quantity, 0);
-          const hasActivity = tR > 0 || tE > 0;
+          const tRecs = todayR.filter(r => r.techId === t.id && r.type !== 'return');
+          const tRets = todayR.filter(r => r.techId === t.id && r.type === 'return');
+          const tExps = todayE.filter(e => e.techId === t.id);
+
+          const aggr = (arr) => {
+            const m = {};
+            arr.forEach(x => { m[x.itemId] = (m[x.itemId]||0) + x.quantity; });
+            return Object.entries(m).map(([id,qty])=>{
+              const it = I.find(i=>i.id===+id);
+              return {name:it?.name||"—", qty, unit:it?.unit||""};
+            });
+          };
+
+          const recDet = aggr(tRecs);
+          const retDet = aggr(tRets);
+          const expDet = aggr(tExps);
+
+          const hasActivity = recDet.length > 0 || retDet.length > 0 || expDet.length > 0;
+
           return <Card key={t.id} style={{padding:"12px 14px"}}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
               <div style={{fontWeight:700, fontSize:14}}>{t.name}</div>
               {!hasActivity && <Badge color={C.muted} small>لا يوجد نشاط</Badge>}
             </div>
-            {hasActivity && <div style={{display:"flex", gap:8, marginTop:8}}>
-              {tR > 0 && <Badge color={C.green} small>📥 استلم: {tR}</Badge>}
-              {tE > 0 && <Badge color={C.amber} small>📤 صرف: {tE}</Badge>}
+            {hasActivity && <div style={{display:"flex", flexDirection:"column", gap:6, marginTop:10}}>
+              {recDet.length > 0 && <div style={{display:"flex", flexWrap:"wrap", gap:4, alignItems:"center"}}>
+                <span style={{fontSize:11, color:C.green, fontWeight:700}}>📥 استلم:</span>
+                {recDet.map((d,i) => <Badge key={i} color={C.green} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+              </div>}
+              {retDet.length > 0 && <div style={{display:"flex", flexWrap:"wrap", gap:4, alignItems:"center"}}>
+                <span style={{fontSize:11, color:C.amber, fontWeight:700}}>↩️ أرجع:</span>
+                {retDet.map((d,i) => <Badge key={i} color={C.amber} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+              </div>}
+              {expDet.length > 0 && <div style={{display:"flex", flexWrap:"wrap", gap:4, alignItems:"center"}}>
+                <span style={{fontSize:11, color:C.red, fontWeight:700}}>📤 صرف:</span>
+                {expDet.map((d,i) => <Badge key={i} color={C.red} small>{d.name}: {d.qty} {d.unit}</Badge>)}
+              </div>}
             </div>}
           </Card>;
         })}
