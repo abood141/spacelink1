@@ -1468,7 +1468,10 @@ const save=async()=>{
       <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
     </Modal>
     <Modal open={modal==="form"} onClose={()=>setModal(null)} title={editing?"✏️ تعديل معدة":"➕ إضافة معدة"}>
-      <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:9}}>
+        <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
+        <Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة، متر..."/>
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
         <Inp label="العدد المتوفر بالمخزن" type="number" value={form.stock} onChange={v=>setForm({...form,stock:v})} placeholder="0"/>
         <Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/>
