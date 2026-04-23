@@ -1841,6 +1841,7 @@ function AdminHistory(){
 function AdminExpense({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [tid,setTid]=useState("");
+  const [subName,setSubName]=useState("");
   const [notes,setNotes]=useState("");
   const [ok,setOk]=useState("");
   const [saving,setSaving]=useState(false);
@@ -1883,12 +1884,12 @@ function AdminExpense({user,toast}){
       const groupId=Date.now().toString();
       await Promise.all(valid.map(l=>{
         const it=items.find(x=>x.id===+l.iid);
-        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:null, subscriberUser:null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name}`));
+        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name}`));
       }));
       await GS.reload("expenses");
       setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
       setRlines([{iid:"",qty:1}]);
-      setLocation("");setNotes("");
+      setLocation("");setSubName("");setNotes("");
       toast("✅ تم تسجيل الصرفية");
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
@@ -1902,7 +1903,10 @@ function AdminExpense({user,toast}){
     <Card style={{padding:15,marginBottom:13}}>
       <div style={{background:C.bg3, padding:"12px", borderRadius:"12px", marginBottom:"15px", border:`1px solid ${C.border}`}}>
         <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
-        <Inp label="ملاحظة العملية (اسم المشترك أو تفاصيل العمل)" value={notes} onChange={setNotes} placeholder="مثال: محمد نوار علوان..."/>
+        <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:9}}>
+          <Inp label="اسم المشترك" value={subName} onChange={setSubName} placeholder="اسم المشترك..."/>
+          <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="تفاصيل العمل..."/>
+        </div>
       </div>
       
       <div style={{color:C.muted,fontSize:11,marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
