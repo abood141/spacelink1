@@ -222,6 +222,7 @@ self.addEventListener('fetch',e=>{if(e.request.url.includes('supabase'))return;e
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js'),
           loadScript('https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'),
           loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js').catch(() => { }),
+          loadScript('https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js')
         ]);
         const src = document.getElementById('app-src').textContent;
         let hash = 0; for (let i = 0; i < src.length; i += 80)hash = (hash * 31 + src.charCodeAt(i)) >>> 0;
@@ -1857,7 +1858,7 @@ function AdminExpense({user,toast}){
 }
 
 // ── Admin Reports ─────────────────────────────────────
-function AdminReports(){
+function AdminReports({toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [tab, setTab] = useState("daily");
   const [expandedDate, setExpandedDate] = useState({});
@@ -1896,8 +1897,80 @@ function AdminReports(){
   const totalExpQty = E.reduce((s,e) => s+e.quantity, 0);
   const avgDispense = (totalExpQty / activeDays).toFixed(1);
 
+  const exportDaily = () => {
+  if (todayR.length === 0 && todayE.length === 0) {
+    if(typeof toast === 'function') toast("لا توجد بيانات لتصديرها اليوم!", "warn");
+    return;
+  }
+
+  const reportData = [];
+  let totalReceipts = 0;
+  let totalExpenses = 0;
+
+  // 1. بيانات الاستلامات
+  todayR.forEach(r => {
+    const it = I.find(i => i.id === r.itemId);
+    const t = T.find(x => x.id === r.techId);
+    const isRet = r.type === 'return';
+    if(!isRet) totalReceipts += r.quantity;
+
+    reportData.push({
+      "التوقيت": r.createdAt?.slice(11, 16) || "",
+      "نوع العملية": isRet ? "↩️ استرجاع" : "📥 تسليم",
+      "الفني": t?.name || "—",
+      "المادة": it?.name || "—",
+      "الكمية": r.quantity,
+      "الوحدة": it?.unit || "",
+      "المشترك": "—",
+      "ملاحظات": r.notes || ""
+    });
+  });
+
+  // 2. بيانات الصرفيات
+  todayE.forEach(e => {
+    const it = I.find(i => i.id === e.itemId);
+    const t = T.find(x => x.id === e.techId);
+    totalExpenses += e.quantity;
+
+    reportData.push({
+      "التوقيت": e.createdAt?.slice(11, 16) || "",
+      "نوع العملية": "📤 صرفية",
+      "الفني": t?.name || "—",
+      "المادة": it?.name || "—",
+      "الكمية": e.quantity,
+      "الوحدة": it?.unit || "",
+      "المشترك": e.subscriberName || "—",
+      "ملاحظات": e.notes || ""
+    });
+  });
+
+  reportData.push({}); 
+  reportData.push({
+    "التوقيت": "📊 الإجمالي",
+    "نوع العملية": `مجموع التسليم: ${totalReceipts}`,
+    "الفني": `مجموع الصرف: ${totalExpenses}`,
+    "المادة": "", "الكمية": "", "الوحدة": "", "المشترك": "", "ملاحظات": ""
+  });
+
+  const ws = XLSX.utils.json_to_sheet(reportData);
+  ws['!dir'] = 'rtl';
+  ws['!cols'] = [
+    {wch: 10}, {wch: 15}, {wch: 18}, {wch: 20}, 
+    {wch: 8}, {wch: 8}, {wch: 25}, {wch: 30}
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "تقرير اليوم");
+  XLSX.writeFile(wb, `SpaceLink_Daily_${today()}.xlsx`);
+  
+  if(typeof toast === 'function') toast("✅ تم تحميل التقرير بنجاح");
+};
+
   return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{fontWeight:800,fontSize:18,marginBottom:11}}>📈 التقارير والإحصائيات</div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
+      <div style={{fontWeight:800,fontSize:18}}>📈 التقارير والإحصائيات</div>
+      {tab === "daily" && <Btn onClick={exportDaily} color={C.green} icon="📊">تصدير Excel</Btn>}
+    </div>
     
     <div style={{display:"flex",gap:4,marginBottom:14,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
       {[
