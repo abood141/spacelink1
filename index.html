@@ -1900,12 +1900,10 @@ function AdminExpense({user,toast}){
     </div>
     
     <Card style={{padding:15,marginBottom:13}}>
-      <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
-      <div style={{height:1,background:C.border,margin:"15px 0"}}/>
-      <div style={{color:C.blue,fontWeight:700,fontSize:13,marginBottom:10}}>تفاصيل العملية (تُطبق على كل المواد)</div>
-      <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
-      
-      <div style={{height:1,background:C.border,margin:"15px 0"}}/>
+      <div style={{background:C.bg3, padding:"12px", borderRadius:"12px", marginBottom:"15px", border:`1px solid ${C.border}`}}>
+        <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
+        <Inp label="ملاحظة العملية (اسم المشترك أو تفاصيل العمل)" value={notes} onChange={setNotes} placeholder="مثال: محمد نوار علوان..."/>
+      </div>
       
       <div style={{color:C.muted,fontSize:11,marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span style={{fontWeight:700}}>المواد المصروفة</span>
