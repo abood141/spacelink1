@@ -1043,34 +1043,78 @@ function AdminDash({user}){
     <Modal open={!!detailsModal} onClose={()=>setDetailsModal(null)} title={detailsModal==='receipts'?"📦 تفاصيل تسليم اليوم":"📤 تفاصيل صرف اليوم"}>
       {detailsModal === 'receipts' && (
         todayR.length === 0 ? <div style={{textAlign:"center", color:C.muted, padding:20}}>لا توجد تسليمات اليوم</div> :
-        [...todayR].reverse().map((r,i) => {
-          const it = I.find(x=>x.id===r.itemId);
-          const t = T.find(x=>x.id===r.techId);
-          const isRet = r.type==='return';
-          return <div key={i} style={{background:C.bg3, borderRadius:10, padding:"10px 12px", marginBottom:8, border:`1px solid ${isRet?C.amber:C.green}40`}}>
-            <div style={{display:"flex", justifyContent:"space-between", marginBottom:5}}>
-              <div style={{fontWeight:700, color:isRet?C.amber:C.green, fontSize:13}}>{t?.name || "—"} {isRet&&<Badge color={C.amber} small>↩ استرجاع</Badge>}</div>
-              <div style={{color:C.muted, fontSize:11, fontWeight:700}}>🕐 {r.createdAt?.slice(11,16) || ""}</div>
-            </div>
-            <div style={{fontSize:13, marginBottom:4, fontWeight:700}}>{r.quantity} {it?.unit || ""} {it?.name || "—"}</div>
-            {r.notes && <div style={{fontSize:12, color:C.muted}}>📝 {r.notes}</div>}
-          </div>;
-        })
+        (() => {
+          const m = {};
+          todayR.forEach(r => {
+            const k = `${r.techId}_${r.type}_${(r.createdAt||'').slice(0,16)}`;
+            if(!m[k]) m[k] = { techId: r.techId, type: r.type, time: (r.createdAt||'').slice(11,16), items: [], notes: new Set() };
+            m[k].items.push(r);
+            if(r.notes) m[k].notes.add(r.notes);
+          });
+          return Object.values(m).sort((a,b) => b.time.localeCompare(a.time)).map((g,i) => {
+            const t = T.find(x=>x.id===g.techId);
+            const isRet = g.type==='return';
+            return <div key={i} style={{background:C.bg3, borderRadius:14, padding:"14px", marginBottom:12, border:`1px solid ${isRet?C.amber:C.green}40`, boxShadow:"0 4px 15px rgba(0,0,0,0.15)"}}>
+              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, borderBottom:`1px solid ${C.border}`, paddingBottom:10}}>
+                <div style={{display:"flex", alignItems:"center", gap:10}}>
+                  <div style={{width:32, height:32, borderRadius:"50%", background:isRet?`${C.amber}20`:`${C.green}20`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16}}>{isRet?"↩":"👷"}</div>
+                  <div style={{fontWeight:800, color:isRet?C.amber:C.green, fontSize:15}}>{t?.name || "—"} {isRet&&<Badge color={C.amber} small>استرجاع</Badge>}</div>
+                </div>
+                <div style={{color:C.muted, fontSize:12, fontWeight:700, background:C.bg4, padding:"4px 10px", borderRadius:8}}>🕐 {g.time}</div>
+              </div>
+              <div style={{display:"flex", flexWrap:"wrap", gap:8, marginBottom:g.notes.size>0?12:0}}>
+                {g.items.map((r,idx) => {
+                  const it = I.find(x=>x.id===r.itemId);
+                  return <div key={idx} style={{background:C.bg4, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 12px", fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
+                    <span style={{color:C.text}}>{r.quantity}</span>
+                    <span style={{color:C.muted, fontSize:11}}>{it?.unit || ""}</span>
+                    <span style={{color:isRet?C.amber:C.green}}>{it?.name || "—"}</span>
+                  </div>;
+                })}
+              </div>
+              {g.notes.size > 0 && <div style={{background:`${C.blue}10`, border:`1px dashed ${C.blue}40`, borderRadius:8, padding:"8px 12px", fontSize:12, color:C.blue, fontWeight:700}}>
+                📝 {[...g.notes].join(' | ')}
+              </div>}
+            </div>;
+          });
+        })()
       )}
       {detailsModal === 'expenses' && (
          todayE.length === 0 ? <div style={{textAlign:"center", color:C.muted, padding:20}}>لا توجد صرفيات اليوم</div> :
-         [...todayE].reverse().map((e,i) => {
-          const it = I.find(x=>x.id===e.itemId);
-          const t = T.find(x=>x.id===e.techId);
-          return <div key={i} style={{background:C.bg3, borderRadius:10, padding:"10px 12px", marginBottom:8, border:`1px solid ${C.amber}40`}}>
-            <div style={{display:"flex", justifyContent:"space-between", marginBottom:5}}>
-              <div style={{fontWeight:700, color:C.amber, fontSize:13}}>{t?.name || "—"}</div>
-              <div style={{color:C.muted, fontSize:11, fontWeight:700}}>🕐 {e.createdAt?.slice(11,16) || ""}</div>
-            </div>
-            <div style={{fontSize:13, marginBottom:4, fontWeight:700}}>{e.quantity} {it?.unit || ""} {it?.name || "—"}</div>
-            {e.notes && <div style={{fontSize:12, color:C.muted}}>📝 {e.notes}</div>}
-          </div>;
-        })
+         (() => {
+          const m = {};
+          todayE.forEach(e => {
+            const k = `${e.techId}_${(e.createdAt||'').slice(0,16)}`;
+            if(!m[k]) m[k] = { techId: e.techId, time: (e.createdAt||'').slice(11,16), items: [], notes: new Set() };
+            m[k].items.push(e);
+            if(e.notes) m[k].notes.add(e.notes);
+          });
+          return Object.values(m).sort((a,b) => b.time.localeCompare(a.time)).map((g,i) => {
+            const t = T.find(x=>x.id===g.techId);
+            return <div key={i} style={{background:C.bg3, borderRadius:14, padding:"14px", marginBottom:12, border:`1px solid ${C.amber}40`, boxShadow:"0 4px 15px rgba(0,0,0,0.15)"}}>
+              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, borderBottom:`1px solid ${C.border}`, paddingBottom:10}}>
+                <div style={{display:"flex", alignItems:"center", gap:10}}>
+                  <div style={{width:32, height:32, borderRadius:"50%", background:`${C.amber}20`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16}}>📤</div>
+                  <div style={{fontWeight:800, color:C.amber, fontSize:15}}>{t?.name || "—"}</div>
+                </div>
+                <div style={{color:C.muted, fontSize:12, fontWeight:700, background:C.bg4, padding:"4px 10px", borderRadius:8}}>🕐 {g.time}</div>
+              </div>
+              <div style={{display:"flex", flexWrap:"wrap", gap:8, marginBottom:g.notes.size>0?12:0}}>
+                {g.items.map((e,idx) => {
+                  const it = I.find(x=>x.id===e.itemId);
+                  return <div key={idx} style={{background:C.bg4, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 12px", fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
+                    <span style={{color:C.text}}>{e.quantity}</span>
+                    <span style={{color:C.muted, fontSize:11}}>{it?.unit || ""}</span>
+                    <span style={{color:C.amber}}>{it?.name || "—"}</span>
+                  </div>;
+                })}
+              </div>
+              {g.notes.size > 0 && <div style={{background:`${C.blue}10`, border:`1px dashed ${C.blue}40`, borderRadius:8, padding:"8px 12px", fontSize:12, color:C.blue, fontWeight:700}}>
+                📝 {[...g.notes].join(' | ')}
+              </div>}
+            </div>;
+          });
+        })()
       )}
     </Modal>
   </div>;
