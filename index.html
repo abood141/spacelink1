@@ -913,7 +913,32 @@ function Login({onLogin}){
 }
 
 
-function AdminDash({user}){
+function AdminDash({user, toast}){
+  const [clearing, setClearing] = useState(false);
+
+  const handleClearToday = async () => {
+    const R = gs.receipts.filter(r => isToday(r.createdAt));
+    const E = gs.expenses.filter(e => isToday(e.createdAt));
+    if (R.length === 0 && E.length === 0) {
+      toast("لا توجد عمليات مسجلة اليوم لتصفيرها", "warn");
+      return;
+    }
+    if (!confirm(`⚠️ تحذير نهائي: هل أنت متأكد من مسح ${R.length + E.length} عملية سجلت اليوم؟ لا يمكن التراجع!`)) return;
+
+    setClearing(true);
+    try {
+      await Promise.all([
+        ...R.map(r => DB.receipts.del(r.id)),
+        ...E.map(e => DB.expenses.del(e.id))
+      ]);
+      await DB.audit.add(user.displayName, "تصفير يومي", `تم مسح سجل اليوم بالكامل`);
+      await GS.reload("receipts", "expenses");
+      toast("✅ تم تصفير سجل اليوم وتحديث الداشبورد");
+    } catch (e) {
+      toast("خطأ أثناء المسح: " + e.message, "error");
+    }
+    setClearing(false);
+  };
   const gs=useGS(["items","techs","receipts","expenses"]);
   const [detailsModal, setDetailsModal] = useState(null);
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
@@ -945,7 +970,13 @@ function AdminDash({user}){
   },[T,E,um]);
 
   return <div className="page" style={{padding:"16px 14px"}}>
-    <div style={{marginBottom:16}}><div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div><div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div></div>
+    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16}}>
+      <div>
+        <div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div>
+        <div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div>
+      </div>
+      <Btn onClick={handleClearToday} color={C.red} size="sm" outline icon="🗑" loading={clearing}>تصفير اليوم</Btn>
+    </div>
     {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}18,${C.red}10)`,border:`1px solid ${C.amber}50`,borderRadius:12,padding:"11px 13px",marginBottom:14}}>
       <div style={{color:C.amber,fontWeight:700,fontSize:13,marginBottom:5}}>⚠ {low.length} مواد تحت حد التنبيه</div>
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
@@ -1708,7 +1739,22 @@ function AdminReceipt({user,toast}){
           </select>
           {rlines.length>1&&<button onClick={()=>remLine(i)} style={{background:`${C.red}20`,border:`1px solid ${C.red}40`,color:C.red,borderRadius:7,width:32,height:32,cursor:"pointer",fontSize:15,flexShrink:0}}>✕</button>}
         </div>
-        {bal!==null&&<div style={{color:bal<0?C.red:C.blue,fontSize:11,marginBottom:7}}>الرصيد الحالي: <strong>{bal} {it?.unit}</strong>{bal<=0&&<Badge color={C.red} small>نفذ</Badge>}</div>}
+        {bal !== null && (
+          <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7, background: bal < 0 ? `${C.red}10` : "transparent", padding: bal < 0 ? "6px 10px" : "0", borderRadius: 8, border: bal < 0 ? `1px dashed ${C.red}40` : "none", transition: "all 0.3s"}}>
+            <div style={{color: bal < 0 ? C.red : C.blue, fontSize: 11}}>
+              الرصيد الحالي: <strong>{bal} {it?.unit}</strong> {bal <= 0 && <Badge color={C.red} small>نفذ</Badge>}
+            </div>
+            {bal < 0 && tab === "receipt" && (
+              <button 
+                onClick={() => updLine(i, "qty", Math.abs(bal))} 
+                title="تعبئة حقل الكمية لتسديد العجز تلقائياً"
+                style={{background: C.green, color: "#fff", border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, boxShadow: `0 3px 10px ${C.green}40`}}>
+                <span>✨ سداد</span>
+                <span style={{background: "rgba(255,255,255,0.25)", padding: "2px 6px", borderRadius: 4}}>+{Math.abs(bal)}</span>
+              </button>
+            )}
+          </div>
+        )}
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div style={{color:C.muted,fontSize:11,flexShrink:0}}>الكمية:</div>
           <QtyPick value={ln.qty} onChange={v=>updLine(i,"qty",v)}/>
@@ -2235,14 +2281,14 @@ function AdminApp({user,toast:showToast,doLogout}){
   const color=C.blue;
 
   const renderPage=()=>{switch(page){
-    case"dash":return<AdminDash user={user}/>;
+    case"dash":return<AdminDash user={user} toast={showToast}/>;
     case"techs":return<AdminTechs user={user} toast={showToast}/>;
     case"items":return<AdminItems user={user} toast={showToast}/>;
     case"receipt":return<AdminReceipt user={user} toast={showToast}/>;
     case"expense":return<AdminExpense user={user} toast={showToast}/>;
     case"history":return<AdminHistory/>;
     case"reports":return<AdminReports toast={showToast}/>;
-    default:return<AdminDash user={user}/>;
+    default:return<AdminDash user={user} toast={showToast}/>;
   }};
 
   return <>
