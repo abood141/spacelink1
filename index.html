@@ -749,7 +749,6 @@ function OpsRow({op}){
       <span style={{fontWeight:700,color:c,fontSize:13}}>{op.quantity} {op.unit}</span>
     </div>
     <div style={{color:C.text,fontSize:13,marginBottom:2}}>{op.itemName}</div>
-    {op.subscriberName&&<div style={{color:C.cyan,fontSize:12}}>👤 {op.subscriberName}{op.subscriberUser&&` (@${op.subscriberUser})`}</div>}
 
     {op.notes&&<div style={{color:C.muted,fontSize:11}}>📝 {op.notes}</div>}
     {op.workImage&&<><button onClick={()=>setOpen(true)} style={{background:`${C.blue}20`,border:`1px solid ${C.blue}40`,color:C.blue,borderRadius:7,padding:"2px 9px",fontSize:11,cursor:"pointer",marginTop:3}}>🖼 صورة</button>
@@ -761,7 +760,6 @@ function GroupedRow({group,allItems}){
   const [open,setOpen]=useState(false);const first=group[0];const isR=first.type==="تسليم";const c=isR?C.green:C.amber;
   return <div style={{background:C.bg3,borderRadius:12,padding:"12px 13px",marginBottom:8,border:group.length>1?`1px solid ${C.amber}30`:"1px solid transparent"}}>
     <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7}}><Dot c={c}/><Badge color={c} small>{first.type}</Badge><span style={{fontWeight:700,fontSize:13}}>{first.techName}</span>{group.length>1&&<Badge color={C.amber} small>{group.length} مواد</Badge>}</div>
-    {first.subscriberName&&<div style={{background:C.bg4,borderRadius:8,padding:"7px 11px",marginBottom:7,color:C.cyan,fontSize:13,fontWeight:700}}>👤 {first.subscriberName}{first.subscriberUser&&<span style={{color:C.muted,fontWeight:400}}> (@{first.subscriberUser})</span>}</div>}
     <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:5}}>
       {group.map((op,i)=>{const img=allItems?.find(x=>x.id===op.itemId)?.image;return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg4,borderRadius:7,padding:"6px 10px"}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>{img&&<img src={img} style={{width:24,height:24,borderRadius:5,objectFit:"cover"}} alt=""/>}<span style={{fontSize:13}}>{op.itemName}</span></div>
@@ -917,6 +915,7 @@ function Login({onLogin}){
 
 function AdminDash({user}){
   const gs=useGS(["items","techs","receipts","expenses"]);
+  const [detailsModal, setDetailsModal] = useState(null);
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
   const T=(gs.techs||[]).filter(t=>t.is_active!==false),I=(gs.items||[]).filter(i=>i.is_active!==false),R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
@@ -952,7 +951,12 @@ function AdminDash({user}){
       <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
-      {[["🔧",I.length,C.purple,"المعدات"],["👷",T.length,C.blue,"الفنيين"],["📦",totR,C.green,"تسليم اليوم"],["📤",totS,C.amber,"صرف اليوم"]].map(([ic,v,c,l])=><Card key={l} style={{padding:"13px 15px"}} glow={c}><div style={{fontSize:20,marginBottom:3}}>{ic}</div><div style={{fontSize:22,fontWeight:700,color:c,lineHeight:1}}>{v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{l}</div></Card>)}
+      {[
+        {ic:"🔧", v:I.length, c:C.purple, l:"المعدات"},
+        {ic:"👷", v:T.length, c:C.blue, l:"الفنيين"},
+        {ic:"📦", v:totR, c:C.green, l:"تسليم اليوم", onClick: ()=>setDetailsModal('receipts')},
+        {ic:"📤", v:totS, c:C.amber, l:"صرف اليوم", onClick: ()=>setDetailsModal('expenses')}
+      ].map((item, i)=><Card key={i} onClick={item.onClick} style={{padding:"13px 15px", cursor:item.onClick?"pointer":"default"}} glow={item.c}><div style={{fontSize:20,marginBottom:3}}>{item.ic}</div><div style={{fontSize:22,fontWeight:700,color:item.c,lineHeight:1}}>{item.v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{item.l}</div></Card>)}
     </div>
 
     {/* Smart Insights */}
@@ -1036,6 +1040,39 @@ function AdminDash({user}){
         })}
       </Card>;
     })()}
+    <Modal open={!!detailsModal} onClose={()=>setDetailsModal(null)} title={detailsModal==='receipts'?"📦 تفاصيل تسليم اليوم":"📤 تفاصيل صرف اليوم"}>
+      {detailsModal === 'receipts' && (
+        todayR.length === 0 ? <div style={{textAlign:"center", color:C.muted, padding:20}}>لا توجد تسليمات اليوم</div> :
+        [...todayR].reverse().map((r,i) => {
+          const it = I.find(x=>x.id===r.itemId);
+          const t = T.find(x=>x.id===r.techId);
+          const isRet = r.type==='return';
+          return <div key={i} style={{background:C.bg3, borderRadius:10, padding:"10px 12px", marginBottom:8, border:`1px solid ${isRet?C.amber:C.green}40`}}>
+            <div style={{display:"flex", justifyContent:"space-between", marginBottom:5}}>
+              <div style={{fontWeight:700, color:isRet?C.amber:C.green, fontSize:13}}>{t?.name || "—"} {isRet&&<Badge color={C.amber} small>↩ استرجاع</Badge>}</div>
+              <div style={{color:C.muted, fontSize:11, fontWeight:700}}>🕐 {r.createdAt?.slice(11,16) || ""}</div>
+            </div>
+            <div style={{fontSize:13, marginBottom:4, fontWeight:700}}>{r.quantity} {it?.unit || ""} {it?.name || "—"}</div>
+            {r.notes && <div style={{fontSize:12, color:C.muted}}>📝 {r.notes}</div>}
+          </div>;
+        })
+      )}
+      {detailsModal === 'expenses' && (
+         todayE.length === 0 ? <div style={{textAlign:"center", color:C.muted, padding:20}}>لا توجد صرفيات اليوم</div> :
+         [...todayE].reverse().map((e,i) => {
+          const it = I.find(x=>x.id===e.itemId);
+          const t = T.find(x=>x.id===e.techId);
+          return <div key={i} style={{background:C.bg3, borderRadius:10, padding:"10px 12px", marginBottom:8, border:`1px solid ${C.amber}40`}}>
+            <div style={{display:"flex", justifyContent:"space-between", marginBottom:5}}>
+              <div style={{fontWeight:700, color:C.amber, fontSize:13}}>{t?.name || "—"}</div>
+              <div style={{color:C.muted, fontSize:11, fontWeight:700}}>🕐 {e.createdAt?.slice(11,16) || ""}</div>
+            </div>
+            <div style={{fontSize:13, marginBottom:4, fontWeight:700}}>{e.quantity} {it?.unit || ""} {it?.name || "—"}</div>
+            {e.notes && <div style={{fontSize:12, color:C.muted}}>📝 {e.notes}</div>}
+          </div>;
+        })
+      )}
+    </Modal>
   </div>;
 }
 
@@ -1757,8 +1794,6 @@ function AdminHistory(){
 function AdminExpense({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [tid,setTid]=useState("");
-  const [subName,setSubName]=useState("");
-  const [subUser,setSubUser]=useState("");
   const [notes,setNotes]=useState("");
   const [ok,setOk]=useState("");
   const [saving,setSaving]=useState(false);
@@ -1798,15 +1833,15 @@ function AdminExpense({user,toast}){
     setSaving(true);
     try{
       const t=techs.find(x=>x.id===+tid);
-      const groupId=Date.now().toString()+"_"+(subName||"");
+      const groupId=Date.now().toString();
       await Promise.all(valid.map(l=>{
         const it=items.find(x=>x.id===+l.iid);
-        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:subUser||null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name} - ${subName||"غير محدد"}`));
+        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:null, subscriberUser:null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name}`));
       }));
       await GS.reload("expenses");
       setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
       setRlines([{iid:"",qty:1}]);
-      setSubName("");setSubUser("");setLocation("");setNotes("");
+      setLocation("");setNotes("");
       toast("✅ تم تسجيل الصرفية");
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
@@ -1821,8 +1856,6 @@ function AdminExpense({user,toast}){
       <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
       <div style={{height:1,background:C.border,margin:"15px 0"}}/>
       <div style={{color:C.blue,fontWeight:700,fontSize:13,marginBottom:10}}>تفاصيل العملية (تُطبق على كل المواد)</div>
-      <Inp label="اسم المشترك / الموقع" value={subName} onChange={setSubName} placeholder="مثال: علي محمد..."/>
-      <div style={{width:"100%"}}><Inp label="يوزر المشترك" value={subUser} onChange={setSubUser} placeholder="اختياري..."/></div>
       <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="اختياري..."/>
       
       <div style={{height:1,background:C.border,margin:"15px 0"}}/>
@@ -1921,7 +1954,6 @@ function AdminReports({toast}){
       "المادة": it?.name || "—",
       "الكمية": r.quantity,
       "الوحدة": it?.unit || "",
-      "المشترك": "—",
       "ملاحظات": r.notes || ""
     });
   });
@@ -1939,7 +1971,6 @@ function AdminReports({toast}){
       "المادة": it?.name || "—",
       "الكمية": e.quantity,
       "الوحدة": it?.unit || "",
-      "المشترك": e.subscriberName || "—",
       "ملاحظات": e.notes || ""
     });
   });
@@ -1949,14 +1980,14 @@ function AdminReports({toast}){
     "التوقيت": "📊 الإجمالي",
     "نوع العملية": `مجموع التسليم: ${totalReceipts}`,
     "الفني": `مجموع الصرف: ${totalExpenses}`,
-    "المادة": "", "الكمية": "", "الوحدة": "", "المشترك": "", "ملاحظات": ""
+    "المادة": "", "الكمية": "", "الوحدة": "", "ملاحظات": ""
   });
 
   const ws = XLSX.utils.json_to_sheet(reportData);
   ws['!dir'] = 'rtl';
   ws['!cols'] = [
     {wch: 10}, {wch: 15}, {wch: 18}, {wch: 20}, 
-    {wch: 8}, {wch: 8}, {wch: 25}, {wch: 30}
+    {wch: 8}, {wch: 8}, {wch: 30}
   ];
 
   const wb = XLSX.utils.book_new();
@@ -2132,10 +2163,11 @@ function AdminApp({user,toast:showToast,doLogout}){
   useEffect(()=>{
     const el=navRef.current;if(!el)return;
     const h=e=>{
-      const mw=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mw'))||500;
-      const left=(window.innerWidth-mw)/2;const right=left+mw;
-      const isOutside=e.clientX<left||e.clientX>right;const isNav=el.contains(e.target);
-      if((isOutside||isNav)&&Math.abs(e.deltaY)>Math.abs(e.deltaX)){e.preventDefault();el.scrollLeft+=e.deltaY;}
+      const isNav=el.contains(e.target);
+      if(isNav && Math.abs(e.deltaY)>Math.abs(e.deltaX)){
+        e.preventDefault();
+        el.scrollLeft+=e.deltaY;
+      }
     };
     document.addEventListener('wheel',h,{passive:false});
     return()=>document.removeEventListener('wheel',h);
