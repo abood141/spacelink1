@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="preconnect" href="https://icpqrnzvxjexdzwfkcjm.supabase.co" crossorigin>
   <link rel="manifest"
-    href="data:application/json,{&quot;name&quot;:&quot;Space Link&quot;,&quot;short_name&quot;:&quot;SpaceLink&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%2307090F&quot;,&quot;theme_color&quot;:&quot;%234F8EF7&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%232563EB'/%3E%3Ctext y='.9em' font-size='70' x='15'%3E🌐%3C/text%3E%3C/svg%3E&quot;,&quot;sizes&quot;:&quot;any&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
+    href="data:application/json,{"name":"Space Link","short_name":"SpaceLink","start_url":".","display":"standalone","background_color":"%2307090F","theme_color":"%234F8EF7","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%232563EB'/%3E%3Ctext y='.9em' font-size='70' x='15'%3E🌐%3C/text%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml"}]}">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
     * {
@@ -559,13 +559,35 @@ function archiveYesterday(receipts,expenses,techs,items){
   saveArchive(ar.slice(0,30));
 }
 // Check if we should archive (midnight Baghdad)
-function checkMidnightArchive(gs){
+async function checkMidnightArchive(gs){
   const d=baghdadNow();
   const isNearMidnight=d.getUTCHours()===0&&d.getUTCMinutes()<5;
   const lastCheck=LC.get('last_archive_check');
   const todayStr=today();
   if(isNearMidnight&&lastCheck!==todayStr&&gs.receipts&&gs.techs){
     archiveYesterday(gs.receipts,gs.expenses,gs.techs,gs.items);
+    
+    // --- AUTO ZERO BALANCES (محرك التسوية التلقائي) ---
+    try {
+      const ops = [];
+      gs.techs.forEach(t => {
+        const bals = calcBals(t.id, gs.items, gs.receipts, gs.expenses);
+        bals.forEach(b => {
+          if (b.balance < 0) {
+             ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "تسوية تلقائية لمنتصف الليل", null, 'receipt'));
+          } else if (b.balance > 0) {
+             ops.push(DB.receipts.add(t.id, b.id, b.balance, "استرجاع تلقائي لمنتصف الليل", null, 'return'));
+          }
+        });
+      });
+      if(ops.length > 0) {
+        await Promise.all(ops);
+        await DB.audit.add("النظام", "تصفير شامل", "تسوية وتصفير جميع العهد تلقائياً لمنتصف الليل");
+        GS.reload("receipts");
+      }
+    } catch(e) { console.warn("Auto-zero error:", e); }
+    // ------------------------------------------------
+
     LC.set('last_archive_check',todayStr);
   }
 }
@@ -640,8 +662,8 @@ const QtyPick=({value,onChange,max=9999})=>(
 const Modal=({open,onClose,title,children})=>{
   useEffect(()=>{document.body.classList.toggle('modal-open',!!open);return()=>document.body.classList.remove('modal-open');},[open]);
   if(!open)return null;
-  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:5000,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} className="modal-sheet" style={{background:C.bg2,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:"var(--mw,520px)",maxHeight:"88vh",overflowY:"auto",padding:"20px 18px 40px",border:`1px solid ${C.border}`,borderBottom:"none",zIndex:5001}}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:6000,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} className="modal-sheet" style={{background:C.bg2,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:"var(--mw,520px)",maxHeight:"88vh",overflowY:"auto",padding:"20px 18px 40px",border:`1px solid ${C.border}`,borderBottom:"none",zIndex:6001}}>
       <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:"0 auto 18px"}}/>
       {title&&<div style={{fontWeight:800,fontSize:16,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span>{title}</span>
@@ -977,10 +999,7 @@ function AdminDash({user, toast}){
       </div>
       <Btn onClick={handleClearToday} color={C.red} size="sm" outline icon="🗑" loading={clearing}>تصفير اليوم</Btn>
     </div>
-    {low.length>0&&<div style={{background:`linear-gradient(135deg,${C.amber}18,${C.red}10)`,border:`1px solid ${C.amber}50`,borderRadius:12,padding:"11px 13px",marginBottom:14}}>
-      <div style={{color:C.amber,fontWeight:700,fontSize:13,marginBottom:5}}>⚠ {low.length} مواد تحت حد التنبيه</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>{low.map((a,i)=><Badge key={i} color={C.amber} small>{a.name}: {a.balance} {a.unit}</Badge>)}</div>
-    </div>}
+    
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
       {[
         {ic:"🔧", v:I.length, c:C.purple, l:"المعدات"},
@@ -1005,7 +1024,7 @@ function AdminDash({user, toast}){
         ].map(([ic,l,v,c])=><div key={l} style={{background:C.bg4,borderRadius:10,padding:"9px 11px",display:"flex",flexDirection:"column",gap:3}}>
           <div style={{fontSize:16}}>{ic}</div>
           <div style={{color:C.muted,fontSize:10}}>{l}</div>
-          <div style={{color:c,fontWeight:700,fontSize:12,wordBreak:"break-word"}}>{v||"—"}</div>
+          <div title={v} style={{color:c,fontWeight:700,fontSize:12,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',display:'block'}}>{v||"—"}</div>
         </div>)}
       </div>
     </Card>}
@@ -1482,20 +1501,21 @@ function AdminItems({user,toast}){
   const [modal, setModal] = useState(null);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [form,setForm]=useState({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});
+  const [form,setForm]=useState({name:"",unit:"قطعة",stock:0,category:"شبكة",image:null});
   const items=(gs.items||[]).filter(i=>i.is_active!==false);const receipts=gs.receipts||[];const expenses=gs.expenses||[];
   const cats=["شبكة","أجهزة","كابلات","ملحقات","أخرى"];const cc={"شبكة":C.blue,"أجهزة":C.purple,"كابلات":C.cyan,"ملحقات":C.amber,"أخرى":C.muted};
   const getStock=it=>{
-    const rec=receipts.filter(r=>r.itemId===it.id).reduce((s,r)=>s+r.quantity,0);
-    const sp=expenses.filter(e=>e.itemId===it.id).reduce((s,e)=>s+e.quantity,0);
-    return rec-sp;
+    const initial = it.stock || 0;
+    const given = receipts.filter(r=>r.itemId===it.id && r.type!=='return').reduce((s,r)=>s+r.quantity,0);
+    const returned = receipts.filter(r=>r.itemId===it.id && r.type==='return').reduce((s,r)=>s+r.quantity,0);
+    return initial - given + returned;
   };
 const save=async()=>{
     if(!form.name.trim()){toast("أدخل الاسم","error");return;}setSaving(true);
-    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",stock:parseInt(form.stock)||0,category:form.category,threshold:parseInt(form.threshold)||3,image:form.image};
+    try{const it={name:form.name.trim(),unit:form.unit||"قطعة",stock:parseInt(form.stock)||0,category:form.category,image:form.image};
       if(editing){await DB.items.upd({...editing,...it});await DB.audit.add(user.displayName,"تعديل معدة",form.name);toast("✅ تم التحديث");}
       else{if(items.find(i=>i.name===it.name)){toast("المعدة موجودة","error");setSaving(false);return;}await DB.items.add(it);await DB.audit.add(user.displayName,"إضافة معدة",form.name);toast("✅ تمت الإضافة");}
-      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",threshold:"3",image:null});}
+      await GS.reload("items");setModal(null);setEditing(null);setForm({name:"",unit:"قطعة",category:"شبكة",image:null});}
     catch(e){toast("خطأ: "+e.message,"error");}setSaving(false);
   };
   const filtered=items.filter(it=>it.name.includes(search)||it.category?.includes(search));
@@ -1506,38 +1526,32 @@ const save=async()=>{
       <div style={{display:"flex",gap:5}}>
         <Btn onClick={()=>setModal("purchase")} color={C.amber} size="sm" icon="🛒">طلب شراء</Btn>
         <Btn onClick={()=>setModal("scan")} color={C.cyan} size="sm" icon="📷">Scan</Btn>
-        <Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",threshold:"3",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة معدة</Btn>
+<Btn onClick={()=>{setEditing(null);setForm({name:"",unit:"قطعة",stock:0,category:"شبكة",image:null});setModal("form");}} color={C.green} size="sm" icon="+">إضافة معدة</Btn>
       </div>
     </div>
     <Inp value={search} onChange={setSearch} placeholder="🔍 بحث..."/>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-      {filtered.map((it,i)=>{const stock=getStock(it);const col=stock<=0?C.red:stock<=it.threshold?C.amber:C.green;const warn=stock<=it.threshold;return <Card key={it.id} className="animate-list-item" style={{padding:0,overflow:"hidden",animationDelay:`${i*0.05}s`}}>
+{filtered.map((it,i)=>{const stock=getStock(it);return <Card key={it.id} className="animate-list-item" style={{padding:0,overflow:"hidden",animationDelay:`${i*0.05}s`}}>
         {it.image?<img src={it.image} style={{width:"100%",height:80,objectFit:"cover"}} alt=""/>:<div style={{height:80,background:C.bg3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>📦</div>}
         <div style={{padding:"9px 11px"}}>
           <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{it.name}</div>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><Badge color={cc[it.category]||C.muted} small>{it.category||"—"}</Badge><span style={{color:C.muted,fontSize:11}}>{it.unit}</span></div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-            <span style={{color:C.muted,fontSize:10}}>حد التنبيه: {it.threshold}</span>
-            <span style={{color:col,fontWeight:700,fontSize:12}}>{stock>=0?stock:"—"}</span>
-          </div>
-          <div style={{height:3,background:C.bg4,borderRadius:2,marginBottom:7,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${Math.max(0,Math.min(100,stock<=0?0:(stock/(stock+it.threshold))*100))}%`,background:col,borderRadius:2,transition:"width .4s"}}/>
-          </div>
+          <div style={{background:C.bg4, padding:'8px', borderRadius:8, textAlign:'center', color:stock>0?C.green:C.red, fontWeight:800, marginBottom:10}}>{stock} {it.unit}</div>
 <div style={{display:"flex",gap:4}}>
-            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,stock:it.stock||0,category:it.category||"شبكة",threshold:String(it.threshold),image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
+            <Btn size="sm" color={C.blue} onClick={()=>{setEditing(it);setForm({name:it.name,unit:it.unit,stock:it.stock||0,category:it.category||"شبكة",image:it.image||null});setModal("form");}} style={{flex:1,padding:"4px 6px"}}>✏️</Btn>
             <Btn size="sm" color={C.red} onClick={async()=>{if(confirm(`حذف ${it.name}؟`)){await DB.items.del(it.id);await DB.audit.add(user.displayName,"حذف معدة",it.name);await GS.reload("items");toast("🗑 تم");}}} style={{flex:1,padding:"4px 6px"}}>🗑</Btn>
           </div>
         </div>
       </Card>;})}
     </div>
     <Modal open={modal==="purchase"} onClose={()=>setModal(null)} title="🛒 قائمة طلبات الشراء">
-      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد التي وصلت أو اقتربت من حد التنبيه</div>
-      {items.filter(it=>getStock(it)<=it.threshold).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد بمستوى جيد</div>}
-      {items.filter(it=>getStock(it)<=it.threshold).map((it,i)=>{const s=getStock(it);return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-        <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>متوفر: {s} · الحد: {it.threshold} {it.unit}</div></div>
-        <Badge color={s<=0?C.red:C.amber} small>{s<=0?"نفذ":"قارب النفاذ"}</Badge>
+      <div style={{color:C.muted,fontSize:12,marginBottom:11}}>المواد النفذة (الرصيد صفر أو أقل)</div>
+      {items.filter(it=>getStock(it)<=0).length===0&&<div style={{color:C.green,textAlign:"center",padding:20}}>✅ كل المواد متوفرة</div>}
+      {items.filter(it=>getStock(it)<=0).map((it,i)=>{const s=getStock(it);return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+        <div><div style={{fontWeight:600}}>{it.name}</div><div style={{color:C.muted,fontSize:11}}>متوفر: {s} {it.unit}</div></div>
+        <Badge color={C.red} small>نفذ</Badge>
       </div>;})}
-      <Btn onClick={()=>{let msg="🛒 *قائمة طلبات الشراء — Space Link*\n\n";items.filter(it=>getStock(it)<=it.threshold).forEach(it=>{msg+=`• ${it.name} (${it.unit}) — متوفر: ${getStock(it)} / حد: ${it.threshold}\n`;});msg+="\n📅 "+today();window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
+      <Btn onClick={()=>{let msg="🛒 *قائمة طلبات الشراء — Space Link*";items.filter(it=>getStock(it)<=0).forEach(it=>{msg+=`• ${it.name} (${it.unit}) — متوفر: ${getStock(it)} `;});msg+=" 📅 "+today();window.open("https://wa.me/?text="+encodeURIComponent(msg),"_blank");}} color={C.green} full icon="💬" style={{marginTop:12}}>إرسال على واتساب</Btn>
     </Modal>
     <Modal open={modal==="scan"} onClose={()=>setModal(null)} title="📷 Barcode Scanner">
       <BarcodeScanner onResult={code=>{setSearch(code);setModal(null);}} onClose={()=>setModal(null)}/>
@@ -1547,9 +1561,8 @@ const save=async()=>{
         <Inp label="الاسم *" value={form.name} onChange={v=>setForm({...form,name:v})} placeholder="اسم المادة"/>
         <Inp label="الوحدة" value={form.unit} onChange={v=>setForm({...form,unit:v})} placeholder="قطعة، متر..."/>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
-        <Inp label="العدد المتوفر بالمخزن" type="number" value={form.stock} onChange={v=>setForm({...form,stock:v})} placeholder="0"/>
-        <Inp label="حد التنبيه" type="number" value={form.threshold} onChange={v=>setForm({...form,threshold:v})} placeholder="3"/>
+      <div style={{marginBottom:12}}>
+        <Inp label="العدد المتوفر بالمخزن (الرصيد الافتتاحي)" type="number" value={form.stock} onChange={v=>setForm({...form,stock:v})} placeholder="0"/>
       </div>
       <Sel label="الصنف" value={form.category} onChange={v=>setForm({...form,category:v})} options={cats.map(c=>({value:c,label:c}))}/>
       <ImgPick label="(اختياري) صورة" value={form.image} onChange={v=>setForm({...form,image:v})}/>
