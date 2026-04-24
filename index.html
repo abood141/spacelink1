@@ -933,8 +933,9 @@ function AdminDash({user, toast}){
   const [clearing, setClearing] = useState(false);
 
   const handleClearToday = async () => {
-    const R = gs.receipts.filter(r => isToday(r.createdAt));
-    const E = gs.expenses.filter(e => isToday(e.createdAt));
+    const R = gs.receipts.filter(r => isToday(r.createdAt) && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
+    const E = gs.expenses.filter(e => isToday(e.createdAt) && e.notes !== "System Reset");
+
     if (R.length === 0 && E.length === 0) {
       toast("لا توجد عمليات مسجلة اليوم لتصفيرها", "warn");
       return;
@@ -1389,23 +1390,26 @@ function AdminTechs({user,toast}){
   
   const resetAll=async()=>{
     if(!confirm("⚠️ تحذير: هذا سيقوم بتصفير رصيد جميع الفنيين لكل المواد. هل أنت متأكد؟"))return;
-    setSaving(true);toast("⏳ جارٍ التصفير...");
+    setSaving(true);toast("⏳ جارٍ معالجة التصفير الشامل...");
     try{
-      const ops=[];
-      techs.forEach(t=>{
+      for(const t of techs){
         const bals=calcBals(t.id,items,receipts,expenses);
-        bals.forEach(b=>{
-          if(b.balance>0) ops.push(DB.expenses.add({techId:t.id, itemId:b.id, quantity:b.balance, notes:"System Reset"}));
-          else if(b.balance<0) ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "System Reset", user.id));
-        });
-      });
-      await Promise.all(ops);
-      await DB.audit.add(user.displayName,"تصفير شامل","تم تصفير كل أرصدة الفنيين");
-      await GS.reload("receipts","expenses");
+        for(const b of bals){
+          if(Math.abs(b.balance) < 0.01) continue;
+          if(b.balance>0) {
+            await DB.expenses.add({techId:t.id, itemId:b.id, quantity:b.balance, notes:"System Reset"});
+          } else if(b.balance<0) {
+            await DB.receipts.add(t.id, b.id, Math.abs(b.balance), "System Reset", user.id);
+          }
+        }
+      }
+      await DB.audit.add(user.displayName,"تصفير شامل","تم تصفير كل أرصدة الفنيين بنجاح");
+      await GS.forceReload();
       toast("✅ تم تصفير كافة الفنيين");
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
   };
+
 
   if(!gs.techs)return <Skel/>;
   return <div className="page" style={{padding:"16px 14px"}}>
@@ -1794,9 +1798,11 @@ function AdminHistory(){
 
 
   if(!gs.receipts)return <Skel/>;
+  const I = gs.items || [];
   
   // Memoize heavy transformations
   const { allReceipts, allExpGroups } = useMemo(() => {
+
     const T=gs.techs||[], I=gs.items||[], R=gs.receipts||[], E=gs.expenses||[];
     const recs = R.map(r=>({...r,type:"تسليم",techName:T.find(t=>t.id===r.techId)?.name||"—",itemName:I.find(i=>i.id===r.itemId)?.name||"—",unit:I.find(i=>i.id===r.itemId)?.unit||""})).sort((a,b)=>b.createdAt>a.createdAt?1:-1);
     const exps = E.map(e=>({...e,type:"صرفية",techName:T.find(t=>t.id===e.techId)?.name||"—",itemName:I.find(i=>i.id===e.itemId)?.name||"—",unit:I.find(i=>i.id===e.itemId)?.unit||""}));
