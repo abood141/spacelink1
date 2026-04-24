@@ -284,7 +284,10 @@ const sb={
 
 // ── Utils ────────────────────────────────────────────
 const baghdadNow=()=>new Date(Date.now()+3*3600000);
-const now=()=>baghdadNow().toLocaleString("en-GB",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+const now=()=>{
+  const d=baghdadNow();const p=x=>String(x).padStart(2,'0');
+  return `${p(d.getUTCDate())}/${p(d.getUTCMonth()+1)}/${d.getUTCFullYear()}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+};
 const today=()=>baghdadNow().toISOString().slice(0,10);
 function hashPw(pw){let h=5381;for(let i=0;i<pw.length;i++)h=((h<<5)+h)^pw.charCodeAt(i);return(h>>>0).toString(16).padStart(8,"0");}
 const normD=d=>{if(!d)return"";const m=d.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})|(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);if(!m)return"";const p=x=>String(x).padStart(2,'0');return m[1]?`${m[1]}-${p(m[2])}-${p(m[3])}`:`${m[6]}-${p(m[5])}-${p(m[4])}`;};
@@ -800,10 +803,9 @@ function GroupedRow({group,allItems}){
   </div>;
 }
 function BalRow({b,allItems,onEditItem,onZeroItem}){
-  const pct=b.received>0?(b.balance/b.received)*100:0;const col=b.balance<=0?C.red:b.balance<=b.threshold?C.amber:C.green;
+  const pct=b.received>0?(b.balance/b.received)*100:0;const col=C.green;
   const img=allItems?.find(i=>i.id===b.id)?.image;
-  const warn=b.balance<=b.threshold;
-  return <div className={warn?"warning-card":""} style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
+  return <div style={{background:C.bg3,borderRadius:12,padding:"11px 13px",marginBottom:7}}>
     <div style={{display:"flex",gap:9,alignItems:"flex-start",marginBottom:7}}>
       {img&&<img src={img} style={{width:38,height:38,borderRadius:7,objectFit:"cover",flexShrink:0}} alt=""/>}
       <div style={{flex:1}}>
@@ -817,8 +819,6 @@ function BalRow({b,allItems,onEditItem,onZeroItem}){
         </div>
         <div style={{display:"flex",gap:10,fontSize:11,color:C.muted,marginTop:2,flexWrap:"wrap"}}>
           <span style={{color:C.blue}}>↓ {b.received}</span><span style={{color:C.amber}}>↑ {b.spent}</span>
-          {b.balance>0&&b.balance<=b.threshold&&<Badge color={C.amber} small>⚠ قارب النفاذ</Badge>}
-          {b.balance<=0&&<Badge color={C.red} small>✕ نفذ</Badge>}
         </div>
       </div>
     </div>
@@ -1197,7 +1197,6 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
   const bals=useMemo(()=>calcBals(tech.id,items,receipts,expenses),[tech.id,items,receipts,expenses]);
   const [tuData,setTuData]=useState(null);
   useEffect(()=>{DB.techUsers.byTech(tech.id).then(setTuData);},[tech.id]);
-  const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold).length;
   
   const tRecs = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type !== 'return' && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
   const tRets = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type === 'return' && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
@@ -1226,7 +1225,6 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
         <div style={{display:"flex",gap:5,marginTop:4,flexWrap:"wrap"}}>
           <Badge color={C.blue} small>👤 {tuData?.username||"—"}</Badge>
           <Badge color={C.purple} small>{bals.length} مادة</Badge>
-          {low>0&&<Badge color={C.amber} small>⚠ {low}</Badge>}
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
