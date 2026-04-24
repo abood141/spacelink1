@@ -558,39 +558,33 @@ function archiveYesterday(receipts,expenses,techs,items){
   ar.unshift({date:yStr,receipts:recs,expGroups:groupExpenses(rawExp)});
   saveArchive(ar.slice(0,30));
 }
-// Check if we should archive (midnight Baghdad)
 async function checkMidnightArchive(gs){
-  const d=baghdadNow();
-  const isNearMidnight=d.getUTCHours()===0&&d.getUTCMinutes()<5;
-  const lastCheck=LC.get('last_archive_check');
   const todayStr=today();
-  if(isNearMidnight&&lastCheck!==todayStr&&gs.receipts&&gs.techs){
+  const lastCheck=LC.get('last_archive_check');
+  if(lastCheck!==todayStr && gs.receipts && gs.techs){
     archiveYesterday(gs.receipts,gs.expenses,gs.techs,gs.items);
-    
-    // --- AUTO ZERO BALANCES (محرك التسوية التلقائي) ---
     try {
       const ops = [];
       gs.techs.forEach(t => {
         const bals = calcBals(t.id, gs.items, gs.receipts, gs.expenses);
         bals.forEach(b => {
           if (b.balance < 0) {
-             ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "تسوية تلقائية لمنتصف الليل", null, 'receipt'));
+             ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "تصفير تلقائي", null, 'receipt'));
           } else if (b.balance > 0) {
-             ops.push(DB.receipts.add(t.id, b.id, b.balance, "استرجاع تلقائي لمنتصف الليل", null, 'return'));
+             ops.push(DB.receipts.add(t.id, b.id, b.balance, "تصفير تلقائي", null, 'return'));
           }
         });
       });
       if(ops.length > 0) {
         await Promise.all(ops);
-        await DB.audit.add("النظام", "تصفير شامل", "تسوية وتصفير جميع العهد تلقائياً لمنتصف الليل");
+        await DB.audit.add("النظام", "تصفير شامل", "تصفير العهد لليوم الجديد");
         GS.reload("receipts");
       }
     } catch(e) { console.warn("Auto-zero error:", e); }
-    // ------------------------------------------------
-
     LC.set('last_archive_check',todayStr);
   }
 }
+
 
 function buildReportData(gs){
   const T=gs.techs||[],E=gs.expenses||[],R=gs.receipts||[],I=gs.items||[];
@@ -962,7 +956,11 @@ function AdminDash({user, toast}){
     setClearing(false);
   };
   const gs=useGS(["items","techs","receipts","expenses"]);
+  useEffect(()=>{
+    if(gs.receipts&&gs.techs) checkMidnightArchive(gs);
+  },[gs.receipts, gs.techs]);
   const [detailsModal, setDetailsModal] = useState(null);
+
   if(!gs.items)return gs._status==='loading'?<Skel/>:<div style={{padding:"20px 14px",textAlign:"center"}}><div style={{color:C.red,fontSize:13,marginBottom:10}}>⚠️ تعذر الاتصال بقاعدة البيانات</div><Btn onClick={()=>GS.forceReload()} color={C.blue} size="sm">🔄 إعادة المحاولة</Btn></div>;
   const T=(gs.techs||[]).filter(t=>t.is_active!==false),I=(gs.items||[]).filter(i=>i.is_active!==false),R=gs.receipts||[],E=gs.expenses||[];
   const allBals=T.flatMap(t=>calcBals(t.id,I,R,E));
@@ -1178,9 +1176,10 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
   useEffect(()=>{DB.techUsers.byTech(tech.id).then(setTuData);},[tech.id]);
   const low=bals.filter(b=>b.balance>=0&&b.balance<=b.threshold).length;
   
-  const tRecs = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type !== 'return');
-  const tRets = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type === 'return');
-  const tExps = expenses.filter(e => e.techId === tech.id && isToday(e.createdAt));
+  const tRecs = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type !== 'return' && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
+  const tRets = receipts.filter(r => r.techId === tech.id && isToday(r.createdAt) && r.type === 'return' && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
+  const tExps = expenses.filter(e => e.techId === tech.id && isToday(e.createdAt) && e.notes !== "System Reset");
+
   
   const aggr = (arr) => {
     const m = {};
@@ -1792,12 +1791,7 @@ function AdminHistory(){
   const [dateFilter,setDateFilter]=useState(today());
   const gs=useGS(["receipts","expenses","techs","items"]);
 
-  // Midnight archive check
-  useEffect(()=>{
-    if(gs.receipts&&gs.techs)checkMidnightArchive(gs);
-    const id=setInterval(()=>{if(gs.receipts&&gs.techs)checkMidnightArchive(gs);},60000);
-    return()=>clearInterval(id);
-  },[gs.receipts]);
+
 
   if(!gs.receipts)return <Skel/>;
   
