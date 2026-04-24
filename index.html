@@ -1257,6 +1257,12 @@ function TechItem({tech,items,receipts,expenses,user,toast,onEdit,onDelete}){
           {expDet.map((d,i) => <Badge key={i} color={C.amber} small>{d.name}: {d.qty} {d.unit}</Badge>)}
         </div>
       </div>}
+      {bals.length > 0 && <div style={{marginTop:6}}>
+        <div style={{fontSize:11, color:C.blue, fontWeight:700, marginBottom:3}}>📦 المتبقي (العهدة الحالية):</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:4}}>
+          {bals.map((b,i) => <Badge key={i} color={C.blue} small>{b.name}: {b.balance} {b.unit}</Badge>)}
+        </div>
+      </div>}
     </div>}
   </Card>;
 }
@@ -1982,7 +1988,7 @@ function AdminExpense({user,toast}){
       await GS.reload("expenses");
       setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
       setRlines([{iid:"",qty:1}]);
-      setLocation("");setSubName("");setNotes("");
+      setSubName("");setNotes("");
       toast("✅ تم تسجيل الصرفية");
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
@@ -2200,6 +2206,14 @@ function AdminReports({toast}){
                 <span style={{fontSize:11, color:C.red, fontWeight:700}}>📤 صرف:</span>
                 {expDet.map((d,i) => <Badge key={i} color={C.red} small>{d.name}: {d.qty} {d.unit}</Badge>)}
               </div>}
+              {(() => {
+                const bals = calcBals(t.id, I, R, E);
+                if (bals.length === 0) return null;
+                return <div style={{display:"flex", flexWrap:"wrap", gap:4, alignItems:"center", marginTop:4, borderTop:`1px dashed ${C.border}`, paddingTop:6}}>
+                  <span style={{fontSize:11, color:C.blue, fontWeight:700}}>📦 المتبقي:</span>
+                  {bals.map((b,i) => <Badge key={i} color={C.blue} small>{b.name}: {b.balance} {b.unit}</Badge>)}
+                </div>;
+              })()}
             </div>}
           </Card>;
         })}
