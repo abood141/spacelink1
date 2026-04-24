@@ -12,8 +12,10 @@
     content="نظام Space Link: لوحة تحكم ذكية لإدارة مخزون مكتب الإنترنت، تتبع الفنيين، وتسجيل عمليات الصرف والتسليم.">
   <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="preconnect" href="https://icpqrnzvxjexdzwfkcjm.supabase.co" crossorigin>
-  <link rel="manifest"
-    href="data:application/json,{"name":"Space Link","short_name":"SpaceLink","start_url":".","display":"standalone","background_color":"%2307090F","theme_color":"%234F8EF7","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%232563EB'/%3E%3Ctext y='.9em' font-size='70' x='15'%3E🌐%3C/text%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml"}]}">
+  <link rel="manifest" href="data:application/json,{" name":"Space
+    Link","short_name":"SpaceLink","start_url":".","display":"standalone","background_color":"%2307090F","theme_color":"%234F8EF7","icons":[{"src":"data:image/svg+xml,%3Csvg
+    xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' %3E%3Ccircle cx='50' cy='50' r='50' fill='%232563EB'
+    /%3E%3Ctext y='.9em' font-size='70' x='15' %3E🌐%3C/text%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml"}]}">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
     * {
@@ -28,12 +30,10 @@
       -webkit-font-smoothing: antialiased
     }
 
-    body {
-      background: #07090F;
-      color: #E8EFF8;
-      min-height: 100vh;
-      font-family: Tahoma, Arial, sans-serif;
-      overscroll-behavior: none
+
+    font-family: Tahoma,
+    Arial,
+    sans-serif;
     }
 
     body.modal-open {
@@ -561,26 +561,33 @@ function archiveYesterday(receipts,expenses,techs,items){
 async function checkMidnightArchive(gs){
   const todayStr=today();
   const lastCheck=LC.get('last_archive_check');
-  if(lastCheck!==todayStr && gs.receipts && gs.techs){
+  if(lastCheck!==todayStr && gs.receipts && gs.techs && gs.items){
     archiveYesterday(gs.receipts,gs.expenses,gs.techs,gs.items);
     try {
-      const ops = [];
-      gs.techs.forEach(t => {
-        const bals = calcBals(t.id, gs.items, gs.receipts, gs.expenses);
-        bals.forEach(b => {
-          if (b.balance < 0) {
-             ops.push(DB.receipts.add(t.id, b.id, Math.abs(b.balance), "تصفير تلقائي", null, 'receipt'));
-          } else if (b.balance > 0) {
-             ops.push(DB.receipts.add(t.id, b.id, b.balance, "تصفير تلقائي", null, 'return'));
+      const oldR = gs.receipts.filter(r => normD(r.createdAt) !== todayStr);
+      const oldE = gs.expenses.filter(e => normD(e.createdAt) !== todayStr);
+      
+      if (oldR.length > 0 || oldE.length > 0) {
+        const ops = [];
+        for (const it of gs.items) {
+          const oldGiven = oldR.filter(r=>r.itemId===it.id && r.type!=='return').reduce((s,r)=>s+r.quantity,0);
+          const oldReturned = oldR.filter(r=>r.itemId===it.id && r.type==='return').reduce((s,r)=>s+r.quantity,0);
+          if (oldGiven !== 0 || oldReturned !== 0) {
+            const newInitialStock = (it.stock || 0) - oldGiven + oldReturned;
+            ops.push(DB.items.upd({...it, stock: newInitialStock}));
           }
-        });
-      });
-      if(ops.length > 0) {
+        }
         await Promise.all(ops);
-        await DB.audit.add("النظام", "تصفير شامل", "تصفير العهد لليوم الجديد");
-        GS.reload("receipts");
+        
+        const delOps = [];
+        oldR.forEach(r => delOps.push(DB.receipts.del(r.id)));
+        oldE.forEach(e => delOps.push(DB.expenses.del(e.id)));
+        await Promise.all(delOps);
+        
+        await DB.audit.add("النظام", "أرشفة وتصفير", "تم نقل العمليات للأرشيف وتحديث أرصدة المخزن");
+        GS.reload("items", "receipts", "expenses");
       }
-    } catch(e) { console.warn("Auto-zero error:", e); }
+    } catch(e) { console.warn("Auto-archive error:", e); }
     LC.set('last_archive_check',todayStr);
   }
 }
@@ -789,7 +796,7 @@ function GroupedRow({group,allItems}){
     <div style={{color:C.muted,fontSize:13,marginTop:4,fontWeight:500}}>🕐 {first.createdAt}</div>
   </div>;
 }
-function BalRow({b,allItems,onEditItem}){
+function BalRow({b,allItems,onEditItem,onZeroItem}){
   const pct=b.received>0?(b.balance/b.received)*100:0;const col=b.balance<=0?C.red:b.balance<=b.threshold?C.amber:C.green;
   const img=allItems?.find(i=>i.id===b.id)?.image;
   const warn=b.balance<=b.threshold;
@@ -801,6 +808,7 @@ function BalRow({b,allItems,onEditItem}){
           <span style={{fontWeight:700,fontSize:14}}>{b.name}</span>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontWeight:700,color:col}}>{b.balance} {b.unit}</span>
+            {onZeroItem&&<button onClick={()=>onZeroItem(b)} style={{background:`${C.red}15`,border:"none",color:C.red,borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",fontWeight:700}} title="تصفير الرصيد">✕</button>}
             {onEditItem&&<button onClick={()=>onEditItem(b)} style={{background:`${C.blue}15`,border:"none",color:C.blue,borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",fontWeight:700}}>تعديل ✏️</button>}
           </div>
         </div>
@@ -929,12 +937,13 @@ function Login({onLogin}){
 }
 
 
-function AdminDash({user, toast}){
+function AdminDash({user, toast, setPage}){
   const [clearing, setClearing] = useState(false);
+  const [dashDate, setDashDate] = useState(today());
 
   const handleClearToday = async () => {
-    const R = gs.receipts.filter(r => isToday(r.createdAt) && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset");
-    const E = gs.expenses.filter(e => isToday(e.createdAt) && e.notes !== "System Reset");
+    const R = gs.receipts.filter(r => normD(r.createdAt)===dashDate && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset" && r.notes!=="تصفير يدوي");
+    const E = gs.expenses.filter(e => normD(e.createdAt)===dashDate && e.notes !== "System Reset" && e.notes!=="تصفير يدوي");
 
     if (R.length === 0 && E.length === 0) {
       toast("لا توجد عمليات مسجلة اليوم لتصفيرها", "warn");
@@ -969,11 +978,19 @@ function AdminDash({user, toast}){
   const um={};E.forEach(e=>{const it=I.find(i=>i.id===e.itemId);if(!it)return;um[e.itemId]=um[e.itemId]||{name:it.name,unit:it.unit,total:0};um[e.itemId].total+=e.quantity;});
   const top=Object.values(um).sort((a,b)=>b.total-a.total).slice(0,6);
   const days7=[...Array(7)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10);});
-  const daily=days7.map(d=>({day:d.slice(5),"تسليم":R.filter(r=>normD(r.createdAt)===d).length,"صرفية":E.filter(e=>normD(e.createdAt)===d).length}));
+  const archive = getArchive();
+  const daily=days7.map(d=>{
+    if (d === today()) {
+      return {day:d.slice(5),"تسليم":R.filter(r=>normD(r.createdAt)===d).length,"صرفية":E.filter(e=>normD(e.createdAt)===d).length};
+    } else {
+      const a = archive.find(x => x.date === d);
+      return {day:d.slice(5),"تسليم":a ? a.receipts.length : 0,"صرفية":a ? a.expGroups.reduce((s,g)=>s+g.length,0) : 0};
+    }
+  });
   const pie=top.slice(0,5).map((it,i)=>({name:it.name,value:it.total,fill:C.chart[i]}));
 
-  const todayR=R.filter(r=>isToday(r.createdAt));
-  const todayE=E.filter(e=>isToday(e.createdAt));
+  const todayR=R.filter(r=>normD(r.createdAt)===dashDate && r.notes!=="تصفير تلقائي" && r.notes!=="System Reset" && r.notes!=="تصفير يدوي");
+  const todayE=E.filter(e=>normD(e.createdAt)===dashDate && e.notes!=="System Reset" && e.notes!=="تصفير يدوي");
   const totR=todayR.reduce((s,r)=>s+r.quantity,0),totS=todayE.reduce((s,e)=>s+e.quantity,0);
   const techSum=T.map(t=>{const b=calcBals(t.id,I,R,E);return{...t,bal:b.reduce((s,x)=>s+x.balance,0),low:b.filter(x=>x.balance>=0&&x.balance<=x.threshold).length,cnt:b.length};});
 
@@ -994,17 +1011,17 @@ function AdminDash({user, toast}){
     <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16}}>
       <div>
         <div style={{color:C.muted,fontSize:11}}>لوحة التحكم</div>
-        <div style={{fontWeight:800,fontSize:20}}>مرحباً، {user.displayName||user.username} 👋</div>
+        <div style={{fontWeight:800,fontSize:20}}>مرحباً sattar 👋</div>
       </div>
       <Btn onClick={handleClearToday} color={C.red} size="sm" outline icon="🗑" loading={clearing}>تصفير اليوم</Btn>
     </div>
     
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:14}}>
       {[
-        {ic:"🔧", v:I.length, c:C.purple, l:"المعدات"},
-        {ic:"👷", v:T.length, c:C.blue, l:"الفنيين"},
-        {ic:"📦", v:totR, c:C.green, l:"تسليم اليوم", onClick: ()=>setDetailsModal('receipts')},
-        {ic:"📤", v:totS, c:C.amber, l:"صرف اليوم", onClick: ()=>setDetailsModal('expenses')}
+        {ic:"🔧", v:I.length, c:C.purple, l:"المعدات", onClick: ()=>setPage('items')},
+        {ic:"👷", v:T.length, c:C.blue, l:"الفنيين", onClick: ()=>setPage('techs')},
+        {ic:"📦", v:totR, c:C.green, l:"تسليم اليوم", onClick: ()=>setPage('receipt')},
+        {ic:"📤", v:totS, c:C.amber, l:"صرف اليوم", onClick: ()=>setPage('expense')}
       ].map((item, i)=><Card key={i} onClick={item.onClick} style={{padding:"13px 15px", cursor:item.onClick?"pointer":"default"}} glow={item.c}><div style={{fontSize:20,marginBottom:3}}>{item.ic}</div><div style={{fontSize:22,fontWeight:700,color:item.c,lineHeight:1}}>{item.v}</div><div style={{color:C.muted,fontSize:11,marginTop:2}}>{item.l}</div></Card>)}
     </div>
 
@@ -1059,12 +1076,14 @@ function AdminDash({user, toast}){
       })}
     </Card>
     <Card style={{padding:"14px 13px",marginBottom:12}}>
-      <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted}}>📅 ملخص اليوم — {today()}</div>
+      <div style={{fontWeight:700,fontSize:12,marginBottom:9,color:C.muted,display:"flex",alignItems:"center",gap:8}}>
+        📅 ملخص اليوم — <input type="date" value={dashDate} onChange={e=>setDashDate(e.target.value)} style={{background:"transparent",border:"none",color:C.text,fontSize:13,fontWeight:700,outline:"none",fontFamily:"inherit"}}/>
+      </div>
       {(()=>{
         const subs=[...new Set(todayE.map(e=>e.subscriberName).filter(Boolean))];
         return <div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:9}}>
-            {[["📦",todayR.length,C.green,"تسليم"],["📤",todayE.length,C.amber,"صرفية"],["👥",subs.length,C.cyan,"مشترك"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:18}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
+            {[["📦",todayR.length,C.green,"تسليم اليوم"],["📤",todayE.length,C.amber,"صرف اليوم"],["👥",subs.length,C.cyan,"مشترك"]].map(([ic,v,c,l])=><div key={l} style={{background:C.bg3,borderRadius:9,padding:"8px",textAlign:"center"}}><div style={{fontSize:17}}>{ic}</div><div style={{color:c,fontWeight:700,fontSize:18}}>{v}</div><div style={{color:C.muted,fontSize:10}}>{l}</div></div>)}
           </div>
           {subs.length>0&&<div style={{fontSize:11,color:C.muted}}>المشتركين: {subs.join(" · ")}</div>}
           {todayR.length===0&&todayE.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center"}}>لا توجد عمليات اليوم بعد</div>}
@@ -1378,6 +1397,20 @@ function AdminTechs({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [modal,setModal]=useState(null);const [form,setForm]=useState({name:"",phone:"",username:"",password:""});const [saving,setSaving]=useState(false);
   const techs=(gs.techs||[]).filter(t=>t.is_active!==false);const items=(gs.items||[]).filter(i=>i.is_active!==false);const receipts=gs.receipts||[];const expenses=gs.expenses||[];
+  const zeroItem = async (t, b) => {
+    if(!confirm(`هل أنت متأكد من تصفير رصيد ${b.name} للفني ${t.name}؟`)) return;
+    try {
+      if(b.balance > 0) {
+        await DB.expenses.add({techId:t.id, itemId:b.id, quantity:b.balance, notes:"تصفير يدوي"});
+      } else if(b.balance < 0) {
+        await DB.receipts.add(t.id, b.id, Math.abs(b.balance), "تصفير يدوي", user.id);
+      }
+      await DB.audit.add(user.displayName,"تصفير مادة",`تصفير ${b.name} للفني ${t.name}`);
+      await GS.forceReload();
+      setModal(null);
+      toast("✅ تم تصفير المادة");
+    } catch(e) { toast("خطأ: "+e.message, "error"); }
+  };
   const add=async()=>{
     if(!form.name.trim()||!form.username.trim()||!form.password.trim()){toast("أكمل الحقول *","error");return;}
     if(await DB.techUsers.exists(form.username.trim())){toast("اسم المستخدم موجود","error");return;}
@@ -1433,7 +1466,7 @@ function AdminTechs({user,toast}){
     </Modal>
     
     <Modal open={modal?.type==="bal"} onClose={()=>setModal(null)} title={`📦 رصيد — ${modal?.tech?.name}`}>
-      {modal?.bals?.length===0?<div style={{color:C.muted,textAlign:"center",padding:20}}>لا يوجد رصيد</div>:modal?.bals?.map((b,i)=><BalRow key={i} b={b} allItems={modal.items} onEditItem={(item)=>setModal({type:"editItem",tech:modal.tech,item})}/>)}
+      {modal?.bals?.length===0?<div style={{color:C.muted,textAlign:"center",padding:20}}>لا يوجد رصيد</div>:modal?.bals?.map((b,i)=><BalRow key={i} b={b} allItems={modal.items} onEditItem={(item)=>setModal({type:"editItem",tech:modal.tech,item})} onZeroItem={(item)=>zeroItem(modal.tech,item)}/>)}
     </Modal>
     
     <Modal open={modal?.type==="editItem"} onClose={()=>setModal({type:"bal", tech:modal.tech, items:modal.items, bals:calcBals(modal.tech.id,items,receipts,expenses)})} title={`✏️ تعديل رصيد — ${modal?.tech?.name}`}>
@@ -1789,7 +1822,7 @@ function AdminReceipt({user,toast}){
 // ── Admin History ─────────────────────────────────────
 // ── Admin History ─────────────────────────────────────
 function AdminHistory(){
-  const [filter,setFilter]=useState("today");
+  const [filter,setFilter]=useState("all");
   const [tab,setTab]=useState("live");
   const [expanded, setExpanded] = useState({});
   const [dateFilter,setDateFilter]=useState(today());
@@ -2002,6 +2035,7 @@ function AdminExpense({user,toast}){
 function AdminReports({toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [tab, setTab] = useState("daily");
+  const [repDate, setRepDate] = useState(today());
   const [expandedDate, setExpandedDate] = useState({});
 
   if(!gs.receipts) return <Skel/>;
@@ -2012,18 +2046,19 @@ function AdminReports({toast}){
   const E = gs.expenses || [];
   
   // Tab 1: Daily Activity
-  const todayR = R.filter(r => isToday(r.createdAt));
-  const todayE = E.filter(e => isToday(e.createdAt));
+  const todayR = R.filter(r => normD(r.createdAt) === repDate && r.notes !== "تصفير تلقائي" && r.notes !== "System Reset" && r.notes !== "تصفير يدوي");
+  const todayE = E.filter(e => normD(e.createdAt) === repDate && e.notes !== "System Reset" && e.notes !== "تصفير يدوي");
   
   // Tab 2: Archive
   const archive = getArchive();
   
   // Tab 3: Insights
-  const techExpSum = T.map(t => ({...t, totalExp: E.filter(e => e.techId === t.id).reduce((s,e)=>s+e.quantity,0)}));
+  const E_rep = E.filter(e => normD(e.createdAt) === repDate && e.notes !== "System Reset" && e.notes !== "تصفير يدوي");
+  const techExpSum = T.map(t => ({...t, totalExp: E_rep.filter(e => e.techId === t.id).reduce((s,e)=>s+e.quantity,0)}));
   const topTech = techExpSum.reduce((a,b) => b.totalExp > a.totalExp ? b : a, techExpSum[0] || {});
   
   const itemExpSum = {};
-  E.forEach(e => {
+  E_rep.forEach(e => {
     itemExpSum[e.itemId] = (itemExpSum[e.itemId] || 0) + e.quantity;
   });
   const topItems = Object.entries(itemExpSum)
@@ -2034,9 +2069,7 @@ function AdminReports({toast}){
       return {name: it?.name || "—", qty, unit: it?.unit || ""};
     });
     
-  const activeDays = new Set(E.map(e => e.createdAt?.slice(0,10)).filter(Boolean)).size || 1;
-  const totalExpQty = E.reduce((s,e) => s+e.quantity, 0);
-  const avgDispense = (totalExpQty / activeDays).toFixed(1);
+  const totalExpQty = E_rep.reduce((s,e) => s+e.quantity, 0);
 
   const exportDaily = () => {
   if (todayR.length === 0 && todayE.length === 0) {
@@ -2100,7 +2133,7 @@ function AdminReports({toast}){
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "تقرير اليوم");
-  XLSX.writeFile(wb, `SpaceLink_Daily_${today()}.xlsx`);
+  XLSX.writeFile(wb, `SpaceLink_Daily_${repDate}.xlsx`);
   
   if(typeof toast === 'function') toast("✅ تم تحميل التقرير بنجاح");
 };
@@ -2108,7 +2141,10 @@ function AdminReports({toast}){
   return <div className="page" style={{padding:"16px 14px"}}>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
       <div style={{fontWeight:800,fontSize:18}}>📈 التقارير والإحصائيات</div>
-      {tab === "daily" && <Btn onClick={exportDaily} color={C.green} icon="📊">تصدير Excel</Btn>}
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <input type="date" value={repDate} onChange={e=>setRepDate(e.target.value)} style={{background:C.bg3,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,padding:"4px 8px",fontSize:12,outline:"none"}}/>
+        {tab === "daily" && <Btn onClick={exportDaily} color={C.green} size="sm" icon="📊">تصدير</Btn>}
+      </div>
     </div>
     
     <div style={{display:"flex",gap:4,marginBottom:14,background:C.bg2,borderRadius:12,padding:4,border:`1px solid ${C.border}`}}>
@@ -2252,11 +2288,11 @@ function AdminReports({toast}){
           <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
             <span style={{fontSize:24}}>⏱️</span>
             <div>
-              <div style={{color:C.muted, fontSize:12}}>معدل الصرف</div>
-              <div style={{fontWeight:700, fontSize:16, color:C.blue}}>{avgDispense} وحدة / يوم نشط</div>
+              <div style={{color:C.muted, fontSize:12}}>إجمالي الصرف المختارة</div>
+              <div style={{fontWeight:700, fontSize:16, color:C.blue}}>{totalExpQty} وحدة مصروفة</div>
             </div>
           </div>
-          <div style={{fontSize:12, color:C.muted}}>تم الحساب على أساس <strong style={{color:C.text}}>{activeDays}</strong> يوم عمل نشط</div>
+          <div style={{fontSize:12, color:C.muted}}>إجمالي المصروفات لتاريخ <strong style={{color:C.text}}>{repDate}</strong></div>
         </Card>
       </div>
     )}
@@ -2294,14 +2330,14 @@ function AdminApp({user,toast:showToast,doLogout}){
   const color=C.blue;
 
   const renderPage=()=>{switch(page){
-    case"dash":return<AdminDash user={user} toast={showToast}/>;
+    case"dash":return<AdminDash user={user} toast={showToast} setPage={setPage}/>;
     case"techs":return<AdminTechs user={user} toast={showToast}/>;
     case"items":return<AdminItems user={user} toast={showToast}/>;
     case"receipt":return<AdminReceipt user={user} toast={showToast}/>;
     case"expense":return<AdminExpense user={user} toast={showToast}/>;
     case"history":return<AdminHistory/>;
     case"reports":return<AdminReports toast={showToast}/>;
-    default:return<AdminDash user={user} toast={showToast}/>;
+    default:return<AdminDash user={user} toast={showToast} setPage={setPage}/>;
   }};
 
   return <>
