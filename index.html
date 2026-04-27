@@ -1941,6 +1941,7 @@ function AdminExpense({user,toast}){
   const gs=useGS(["techs","items","receipts","expenses"]);
   const [tid,setTid]=useState("");
   const [subName,setSubName]=useState("");
+  const [workType,setWorkType]=useState("صيانة");
   const [notes,setNotes]=useState("");
   const [ok,setOk]=useState("");
   const [saving,setSaving]=useState(false);
@@ -1981,14 +1982,15 @@ function AdminExpense({user,toast}){
     try{
       const t=techs.find(x=>x.id===+tid);
       const groupId=Date.now().toString();
+      const fullNotes=[workType, notes].filter(Boolean).join(' — ');
       await Promise.all(valid.map(l=>{
         const it=items.find(x=>x.id===+l.iid);
-        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:null, notes:notes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name}`));
+        return DB.expenses.add({techId:+tid, itemId:+l.iid, quantity:l.qty, subscriberName:subName||null, subscriberUser:null, notes:fullNotes||null, groupId}).then(()=>DB.audit.add(user.displayName,"صرفية مواد",`${l.qty} ${it?.unit} من ${t?.name} — ${workType}`));
       }));
       await GS.reload("expenses");
       setOk(`تم تسجيل صرفية بـ ${valid.length} مواد من ${t?.name}`);
       setRlines([{iid:"",qty:1}]);
-      setSubName("");setNotes("");
+      setSubName("");setNotes("");setWorkType("صيانة");
       toast("✅ تم تسجيل الصرفية");
     }catch(e){toast("خطأ: "+e.message,"error");}
     setSaving(false);
@@ -2002,6 +2004,16 @@ function AdminExpense({user,toast}){
     <Card style={{padding:15,marginBottom:13}}>
       <div style={{background:C.bg3, padding:"12px", borderRadius:"12px", marginBottom:"15px", border:`1px solid ${C.border}`}}>
         <Sel label="الفني (الذي قام بالعمل)" value={tid} onChange={setTid} options={[{value:"",label:"اختر الفني"},...techs.map(t=>({value:String(t.id),label:t.name}))]}/>
+        <div style={{marginBottom:12}}>
+          <div style={{color:C.muted,fontSize:11,marginBottom:6}}>نوع العمل</div>
+          <div style={{display:"flex",gap:8}}>
+            {[{v:"صيانة",ic:"🔧",c:C.amber},{v:"تنصيب",ic:"📡",c:C.blue}].map(({v,ic,c})=>(
+              <button key={v} onClick={()=>setWorkType(v)} style={{flex:1,padding:"10px 8px",borderRadius:10,border:`2px solid ${workType===v?c:C.border}`,background:workType===v?`${c}20`:C.bg4,color:workType===v?c:C.muted,fontWeight:workType===v?800:400,fontSize:14,cursor:"pointer",transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"inherit"}}>
+                <span>{ic}</span><span>{v}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:9}}>
           <Inp label="اسم المشترك" value={subName} onChange={setSubName} placeholder="اسم المشترك..."/>
           <Inp label="ملاحظة عامة" value={notes} onChange={setNotes} placeholder="تفاصيل العمل..."/>
